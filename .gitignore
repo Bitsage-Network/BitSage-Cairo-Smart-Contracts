@@ -1,0 +1,11 @@
+# Cairo/Starknet
+/target/
+*.profdata
+.starknet_accounts/
+deployed_contracts.json
+
+# Keystores (sensitive)
+**/keystores/*.json
+
+# OS
+.DS_Store

@@ -1,0 +1,105 @@
+{
+  "network": "sepolia",
+  "deployed_at": "2025-08-03T22:18:53Z",
+  "deployer": "0x02f5248a6b08cd6a52cb9db812e98c675be165cf803a56ac06aefbce74d1f2ca",
+  "account_config": "temp_account.json",
+  "keystore": "../CIRO_Network_Backup/20250711_061352/testnet_keystore.json",
+  "contracts": {
+    "ciro_token": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy CIRO Token with class hash [1;33mℹ️  DRY RUN: Would declare CIRO Token[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare CIRO Token
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy CIRO Token with class hash [1;33mℹ️  DRY RUN: Would declare CIRO Token[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare CIRO Token
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare CIRO Token[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare CIRO Token
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "job_manager": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Job Manager with class hash [1;33mℹ️  DRY RUN: Would declare Job Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Job Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy Job Manager with class hash [1;33mℹ️  DRY RUN: Would declare Job Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Job Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Job Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Job Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "cdc_pool": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy CDC Pool with class hash [1;33mℹ️  DRY RUN: Would declare CDC Pool[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare CDC Pool
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy CDC Pool with class hash [1;33mℹ️  DRY RUN: Would declare CDC Pool[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare CDC Pool
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare CDC Pool[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare CDC Pool
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "reputation_manager": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Reputation Manager with class hash [1;33mℹ️  DRY RUN: Would declare Reputation Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Reputation Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy Reputation Manager with class hash [1;33mℹ️  DRY RUN: Would declare Reputation Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Reputation Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Reputation Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Reputation Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "governance_treasury": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Governance Treasury with class hash [1;33mℹ️  DRY RUN: Would declare Governance Treasury[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Governance Treasury
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy Governance Treasury with class hash [1;33mℹ️  DRY RUN: Would declare Governance Treasury[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Governance Treasury
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Governance Treasury[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Governance Treasury
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "linear_vesting": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Linear Vesting with class hash [1;33mℹ️  DRY RUN: Would declare Linear Vesting[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Linear Vesting
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy Linear Vesting with class hash [1;33mℹ️  DRY RUN: Would declare Linear Vesting[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Linear Vesting
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Linear Vesting[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Linear Vesting
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "milestone_vesting": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Milestone Vesting with class hash [1;33mℹ️  DRY RUN: Would declare Milestone Vesting[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Milestone Vesting
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy Milestone Vesting with class hash [1;33mℹ️  DRY RUN: Would declare Milestone Vesting[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Milestone Vesting
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Milestone Vesting[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Milestone Vesting
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "burn_manager": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Burn Manager with class hash [1;33mℹ️  DRY RUN: Would declare Burn Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Burn Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would deploy Burn Manager with class hash [1;33mℹ️  DRY RUN: Would declare Burn Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Burn Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Burn Manager[0m
+[2025-08-03 15:18:52] INFO: DRY RUN: Would declare Burn Manager
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "reputation_manager": {
+    "contract_address": "",
+    "class_hash": "0x06433493d81d988cc260b4994415952ebe4ad6ed263a97b119a56cc4099bde87",
+    "network": "sepolia",
+    "deployed_at": "2025-08-08T04:10:29Z",
+    "deployer_keystore": "../CIRO_Network_Backup/20250711_061352/testnet_keystore.json",
+    "explorer_urls": {
+      "contract": "https://sepolia.starkscan.co/contract/0x026ef6c866d07820fb3bdb8c6eb76b53b98213c978999f5f2428631dfc19f237",
+      "transactions": "https://sepolia.starkscan.co/contract/0x026ef6c866d07820fb3bdb8c6eb76b53b98213c978999f5f2428631dfc19f237#transactions"
+    }
+  }
+}

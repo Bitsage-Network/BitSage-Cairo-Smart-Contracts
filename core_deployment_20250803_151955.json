@@ -1,0 +1,31 @@
+{
+  "network": "sepolia",
+  "deployed_at": "2025-08-03T22:22:38Z",
+  "deployer": "0x02f5248a6b08cd6a52cb9db812e98c675be165cf803a56ac06aefbce74d1f2ca",
+  "core_contracts": {
+    "ciro_token": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy CIRO Token[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare CIRO Token[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "governance_treasury": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Governance Treasury[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Governance Treasury[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "job_manager": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy Job Manager[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare Job Manager[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    },
+    "cdc_pool": {
+      "address": "[1;33mℹ️  DRY RUN: Would deploy CDC Pool[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "class_hash": "[1;33mℹ️  DRY RUN: Would declare CDC Pool[0m
+0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    }
+  }
+}

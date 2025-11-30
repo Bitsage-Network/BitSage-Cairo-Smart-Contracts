@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+RPC="https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_8/GUBwFqKhSgn4mwVbN6Sbn"
+PLAN_DIR="$(cd "$(dirname "$0")" && pwd)"
+RECIPIENTS_JSON="$PLAN_DIR/recipients.json"
+KEYSTORE_DIR="$PLAN_DIR/keystores"
+GENERATED_DIR="$PLAN_DIR/generated"
+mkdir -p "$KEYSTORE_DIR" "$GENERATED_DIR"
+
+TOKEN=$(jq -r '.token' "$RECIPIENTS_JSON")
+DECIMALS=$(jq -r '.amount_decimals' "$RECIPIENTS_JSON")
+PER_CIRO=$(jq -r '.per_recipient_ciro' "$RECIPIENTS_JSON")
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required. Please install jq and re-run." >&2
+  exit 1
+fi
+
+# 1) Generate 10 recipient accounts (addresses only) and keystores
+COUNT=$(jq '.recipients | length' "$RECIPIENTS_JSON")
+if [ "${SKIP_GENERATION:-}" != "1" ] && [ "$COUNT" -lt 10 ]; then
+  echo "Generating $(expr 10 - $COUNT) recipient accounts..."
+  for i in $(seq $((COUNT+1)) 10); do
+    KS="$KEYSTORE_DIR/recipient_$i.keystore.json"
+    ACC_JSON="$GENERATED_DIR/recipient_$i.account.json"
+  if [ -f "$KS" ]; then
+    echo "Keystore exists for recipient_$i — skipping creation"
+  else
+    echo "Creating keystore $KS (using RECIPIENT_PW env if set)..."
+    if [ -n "${RECIPIENT_PW:-}" ]; then
+      # supply password twice via stdin
+      printf "%s\n%s\n" "$RECIPIENT_PW" "$RECIPIENT_PW" | starkli signer keystore new "$KS"
+    else
+      starkli signer keystore new "$KS"
+    fi
+  fi
+  echo "Deriving address (store to $ACC_JSON)..."
+  # Use OZ v1 account type by default. Capture stdout to parse computed address.
+  if [ -f "$ACC_JSON" ]; then
+    OUT="$(cat "$ACC_JSON")"
+  else
+    if [ -n "${RECIPIENT_PW:-}" ]; then
+      OUT=$(printf "%s\n" "$RECIPIENT_PW" | starkli account oz init "$ACC_JSON" --keystore "$KS" --class-hash 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564 2>&1)
+    else
+      OUT=$(starkli account oz init "$ACC_JSON" --keystore "$KS" --class-hash 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564 2>&1)
+    fi
+  fi
+  echo "$OUT" | sed -n 's/^/    /p'
+  # Parse the printed address (line: "Once deployed, this account will be available at: <addr>")
+  ADDR=$(echo "$OUT" | sed -n 's/.*available at: *\(0x[0-9a-fA-F]\+\).*/\1/p' | tail -1)
+    if [ -z "$ADDR" ]; then
+      echo "Failed to derive address for recipient $i" >&2; exit 1
+    fi
+    # Append to recipients.json
+    tmp=$(mktemp)
+    jq --arg addr "$ADDR" '.recipients += [{"address": $addr, "note": ("Recipient " + (now|tostring))}]' "$RECIPIENTS_JSON" > "$tmp"
+    mv "$tmp" "$RECIPIENTS_JSON"
+    echo "Recipient $i: $ADDR"
+  done
+fi
+
+# 2) Compute amount in wei (u256 low/high)
+# 10000 * 10^18 = 10000e18
+AMOUNT_DEC=$PER_CIRO
+pow18=1000000000000000000
+AMOUNT_WEI=$(python3 - <<PY
+print(int("$AMOUNT_DEC")*int($pow18))
+PY
+)
+LOW=$(python3 - <<PY
+print($AMOUNT_WEI & ((1<<128)-1))
+PY
+)
+HIGH=$(python3 - <<PY
+print(($AMOUNT_WEI >> 128) & ((1<<128)-1))
+PY
+)
+
+# 3) Execute transfers (prompt for main holder keystore when invoking)
+MAIN_ACC_JSON="/Users/ciro/ciro-network/cairo-contracts/testnet_account.json"
+MAIN_KS="/Users/ciro/ciro-network/cairo-contracts/testnet_keystore.json"
+HOLDER_ADDR="0xc651f117d194bdf988c10769ad2260859fc6ecd6d1c49bcdb5e5bd9d806220"
+
+echo "Reviewing recipients and performing transfers..."
+N=$(jq '.recipients | length' "$RECIPIENTS_JSON")
+for i in $(seq 0 $((N-1))); do
+  TO=$(jq -r ".recipients[$i].address" "$RECIPIENTS_JSON")
+  NOTE=$(jq -r ".recipients[$i].note" "$RECIPIENTS_JSON")
+  echo "Transfer to $TO ($NOTE)"
+  # starkli ERC20 transfer(to, amount_low, amount_high)
+  starkli invoke --watch --rpc "$RPC" "$TOKEN" transfer "$TO" "$LOW" "$HIGH" \
+    --account "$MAIN_ACC_JSON" --keystore "$MAIN_KS"
+  sleep 1
+ done
+
+ echo "Airdrop complete. Verifying balances..."
+ for i in $(seq 0 $((N-1))); do
+   TO=$(jq -r ".recipients[$i].address" "$RECIPIENTS_JSON")
+   echo -n "$TO -> "
+   starkli call --rpc "$RPC" "$TOKEN" balance_of "$TO" || true
+ done

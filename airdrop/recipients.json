@@ -1,0 +1,47 @@
+{
+  "token": "0x0662c81332894247404fff35313f84d0d832b5eeaaaa6f58e6d32c4dd66d279a",
+  "amount_decimals": 18,
+  "per_recipient_ciro": 9999,
+  "recipients": [
+    {
+      "address": "0x04fabf7bacf1a37c6fb7e2ff8fceeacde693c334f0a92c8b55634220db682042",
+      "note": "Recipient 1"
+    },
+    {
+      "address": "0x02af7b01a9e1370ccc32244d5a4fded1c3a21d4fe06a80863b18b1dfa26cd1b6",
+      "note": "Recipient 2"
+    },
+    {
+      "address": "0x067e425334616bae0498c3fa9ebe83040e1382f297fe4a95468ead4e12f7ec8d",
+      "note": "Recipient 3"
+    },
+    {
+      "address": "0x064f0cf51b2fcfcecea41122a4e7a936a5c6453008395d677937d61e94035e80",
+      "note": "Recipient 4"
+    },
+    {
+      "address": "0x070a9c4a6ba37524481597ae60fdc3f515e69478c14fd1e53753500e485c121e",
+      "note": "Recipient 6"
+    },
+    {
+      "address": "0x04cff0a909caaa0304258f356dffbab0081ea95da31953bee099d2021041e0c8",
+      "note": "Recipient 7"
+    },
+    {
+      "address": "0x01fea7b899a9077233f486d40f2707aba3d845b82d92f6033ad5b72aec6fd961",
+      "note": "Recipient 5"
+    },
+    {
+      "address": "0x0423b803847b5868bba11176abed4d9f3609e2e7bd2aa95c096b42145e12a588",
+      "note": "Recipient 8"
+    },
+    {
+      "address": "0x04d6b55affc2ce5b67da6a3e45335efc0ba7fc2c27bb94860e5ea01830298e32",
+      "note": "Recipient 9"
+    },
+    {
+      "address": "0x04a4fb1f5894bb159103352be2df447fe5687bb7862135143f2aa9b210eb892e",
+      "note": "Recipient 10"
+    }
+  ]
+}
