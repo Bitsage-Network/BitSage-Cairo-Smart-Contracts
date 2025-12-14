@@ -4,8 +4,20 @@
 .starknet_accounts/
 deployed_contracts.json
 
+# Deployment records (contain addresses & keystores)
+/deployments/
+testnet_*.json
+*_deployment*.json
+*_deployment*.log
+temp_account.json
+
 # Keystores (sensitive)
 **/keystores/*.json
+
+# Backups
+*.bak
+*.bak2
+*.backup
 
 # OS
 .DS_Store
