@@ -54,6 +54,9 @@ pub mod staking;
 // Testnet faucet for token distribution
 pub mod faucet;
 
+// Address registry for human-readable names (obelysk:, sage:, bitsage:)
+pub mod registry;
+
 // Economics (based on BitSage Financial Model v2)
 // - Fee Management (20% protocol fee, 70/20/10 split)
 // - Collateral System
