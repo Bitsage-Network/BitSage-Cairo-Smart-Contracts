@@ -57,6 +57,18 @@ pub mod faucet;
 // Address registry for human-readable names (obelysk:, sage:, bitsage:)
 pub mod registry;
 
+// Distribution - Merkle airdrops, vesting integration
+pub mod distribution;
+
+// Bridge - L1 ↔ Starknet token bridging
+pub mod bridge;
+
+// Oracle - Pragma price feeds
+pub mod oracle;
+
+// DEX - AMM pools for SAGE/USDC
+pub mod dex;
+
 // Economics (based on BitSage Financial Model v2)
 // - Fee Management (20% protocol fee, 70/20/10 split)
 // - Collateral System
