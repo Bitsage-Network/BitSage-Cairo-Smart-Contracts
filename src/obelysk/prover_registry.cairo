@@ -17,19 +17,21 @@
 // =============================================================================
 
 use starknet::ContractAddress;
-use core::array::ArrayTrait;
 
 // =============================================================================
 // Data Types
 // =============================================================================
 
 /// TEE attestation data (TDX/SEV-SNP/H100-CC measurements)
-#[derive(Drop, Serde, starknet::Store)]
+/// Uses fixed-size representation for storage compatibility
+#[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct TeeAttestation {
-    /// MRTD - Measurement of initial TD contents (48 bytes as 6 felt252)
-    pub mrtd: Array<felt252>,
-    /// Image hash of the prover binary (32 bytes as 4 felt252)
-    pub image_hash: Array<felt252>,
+    /// MRTD - Primary measurement hash (first 32 bytes of 48-byte measurement)
+    pub mrtd_high: felt252,
+    pub mrtd_low: felt252,
+    /// Image hash of the prover binary (32 bytes as 2 felt252)
+    pub image_hash_high: felt252,
+    pub image_hash_low: felt252,
     /// TEE type: 0 = Intel TDX, 1 = AMD SEV-SNP, 2 = NVIDIA H100 CC
     pub tee_type: u8,
     /// Timestamp of attestation
@@ -37,7 +39,7 @@ pub struct TeeAttestation {
 }
 
 /// Registered prover information
-#[derive(Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct ProverInfo {
     /// Prover's Starknet address
     pub address: ContractAddress,
@@ -58,7 +60,7 @@ pub struct ProverInfo {
 }
 
 /// Pricing configuration
-#[derive(Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct PricingConfig {
     /// Base price per proof in CIRO (18 decimals)
     pub base_price_per_proof: u256,
@@ -71,7 +73,7 @@ pub struct PricingConfig {
 }
 
 /// Proof request from client
-#[derive(Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct ProofRequest {
     pub client: ContractAddress,
     pub proof_size_log: u8,
@@ -88,8 +90,8 @@ pub struct ProofRequest {
 #[starknet::interface]
 pub trait IObelyskProverRegistry<TContractState> {
     // === Admin Functions ===
-    fn add_allowed_image_hash(ref self: TContractState, image_hash: Array<felt252>);
-    fn remove_allowed_image_hash(ref self: TContractState, image_hash: Array<felt252>);
+    fn add_allowed_image_hash(ref self: TContractState, image_hash_high: felt252, image_hash_low: felt252);
+    fn remove_allowed_image_hash(ref self: TContractState, image_hash_high: felt252);
     fn update_pricing(ref self: TContractState, config: PricingConfig);
     fn set_verifier_address(ref self: TContractState, verifier: ContractAddress);
     
@@ -115,11 +117,11 @@ pub trait IObelyskProverRegistry<TContractState> {
     fn submit_proof(
         ref self: TContractState,
         request_id: u256,
-        proof: Array<felt252>,
+        proof_commitment: felt252,
     );
     
     // === View Functions ===
-    fn is_image_hash_allowed(self: @TContractState, image_hash: Array<felt252>) -> bool;
+    fn is_image_hash_allowed(self: @TContractState, image_hash_high: felt252) -> bool;
     fn get_prover_info(self: @TContractState, prover: ContractAddress) -> ProverInfo;
     fn get_pricing(self: @TContractState) -> PricingConfig;
     fn get_proof_price(self: @TContractState, proof_size_log: u8) -> u256;
@@ -309,21 +311,20 @@ pub mod ObelyskProverRegistry {
     impl ObelyskProverRegistryImpl of IObelyskProverRegistry<ContractState> {
         // === Admin Functions ===
         
-        fn add_allowed_image_hash(ref self: ContractState, image_hash: Array<felt252>) {
+        fn add_allowed_image_hash(ref self: ContractState, image_hash_high: felt252, image_hash_low: felt252) {
             self._only_owner();
-            let hash_key = *image_hash.at(0); // Use first felt as key
-            self.allowed_image_hashes.write(hash_key, true);
+            // Use high part as the key for lookup
+            self.allowed_image_hashes.write(image_hash_high, true);
             self.emit(ImageHashAdded { 
-                hash_prefix: hash_key,
+                hash_prefix: image_hash_high,
                 added_by: get_caller_address(),
             });
         }
 
-        fn remove_allowed_image_hash(ref self: ContractState, image_hash: Array<felt252>) {
+        fn remove_allowed_image_hash(ref self: ContractState, image_hash_high: felt252) {
             self._only_owner();
-            let hash_key = *image_hash.at(0);
-            self.allowed_image_hashes.write(hash_key, false);
-            self.emit(ImageHashRemoved { hash_prefix: hash_key });
+            self.allowed_image_hashes.write(image_hash_high, false);
+            self.emit(ImageHashRemoved { hash_prefix: image_hash_high });
         }
 
         fn update_pricing(ref self: ContractState, config: PricingConfig) {
@@ -347,8 +348,7 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             
             // Verify attestation image hash is allowed
-            let hash_key = *attestation.image_hash.at(0);
-            assert(self.allowed_image_hashes.read(hash_key), 'Image hash not allowed');
+            assert(self.allowed_image_hashes.read(attestation.image_hash_high), 'Image hash not allowed');
             
             let tee_type = attestation.tee_type;
             
@@ -395,8 +395,7 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             
             // Verify new attestation is allowed
-            let hash_key = *attestation.image_hash.at(0);
-            assert(self.allowed_image_hashes.read(hash_key), 'Image hash not allowed');
+            assert(self.allowed_image_hashes.read(attestation.image_hash_high), 'Image hash not allowed');
             
             let mut info = self.provers.read(caller);
             info.attestation = attestation;
@@ -408,7 +407,8 @@ pub mod ObelyskProverRegistry {
             let mut info = self.provers.read(caller);
             assert(info.is_active, 'Prover not registered');
             
-            info.stake = info.stake + amount;
+            let new_total = info.stake + amount;
+            info.stake = new_total;
             self.provers.write(caller, info);
             
             // TODO: Transfer CIRO tokens from caller to contract
@@ -417,7 +417,7 @@ pub mod ObelyskProverRegistry {
             self.emit(ProverStaked { 
                 prover: caller, 
                 amount, 
-                total_stake: info.stake + amount,
+                total_stake: new_total,
             });
         }
 
@@ -426,7 +426,8 @@ pub mod ObelyskProverRegistry {
             let mut info = self.provers.read(caller);
             assert(info.stake >= amount, 'Insufficient stake');
             
-            info.stake = info.stake - amount;
+            let remaining = info.stake - amount;
+            info.stake = remaining;
             self.provers.write(caller, info);
             
             // TODO: Transfer CIRO tokens back to prover
@@ -435,7 +436,7 @@ pub mod ObelyskProverRegistry {
             self.emit(ProverUnstaked { 
                 prover: caller, 
                 amount, 
-                remaining_stake: info.stake - amount,
+                remaining_stake: remaining,
             });
         }
 
@@ -453,11 +454,12 @@ pub mod ObelyskProverRegistry {
             let request_id = self.next_request_id.read();
             self.next_request_id.write(request_id + 1);
             
+            let zero_address: ContractAddress = 0.try_into().unwrap();
             let request = ProofRequest {
                 client: caller,
                 proof_size_log,
                 price,
-                assigned_prover: starknet::contract_address_const::<0>(),
+                assigned_prover: zero_address,
                 status: 0, // pending
                 created_at: get_block_timestamp(),
             };
@@ -480,7 +482,7 @@ pub mod ObelyskProverRegistry {
         fn submit_proof(
             ref self: ContractState,
             request_id: u256,
-            proof: Array<felt252>,
+            proof_commitment: felt252,
         ) {
             let caller = get_caller_address();
             let mut request = self.proof_requests.read(request_id);
@@ -496,7 +498,7 @@ pub mod ObelyskProverRegistry {
             
             // TODO: Call stwo-cairo-verifier to verify proof
             // let verifier = self.verifier_address.read();
-            // let verified = IStwoVerifier::verify(verifier, proof);
+            // let verified = IStwoVerifier::verify(verifier, proof_commitment);
             // assert(verified, 'Proof verification failed');
             
             self.emit(ProofSubmitted { request_id, prover: caller });
@@ -533,9 +535,8 @@ pub mod ObelyskProverRegistry {
 
         // === View Functions ===
         
-        fn is_image_hash_allowed(self: @ContractState, image_hash: Array<felt252>) -> bool {
-            let hash_key = *image_hash.at(0);
-            self.allowed_image_hashes.read(hash_key)
+        fn is_image_hash_allowed(self: @ContractState, image_hash_high: felt252) -> bool {
+            self.allowed_image_hashes.read(image_hash_high)
         }
 
         fn get_prover_info(self: @ContractState, prover: ContractAddress) -> ProverInfo {

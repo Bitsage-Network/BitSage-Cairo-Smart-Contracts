@@ -48,4 +48,13 @@ pub mod contracts {
 
 pub mod obelysk;
 
+// Prover staking for GPU workers
+pub mod staking;
+
+// Economics (based on BitSage Financial Model v2)
+// - Fee Management (20% protocol fee, 70/20/10 split)
+// - Collateral System
+// - Escrow for job payments
+pub mod economics;
+
 // Tests are located in the tests/ directory and managed by snforge
