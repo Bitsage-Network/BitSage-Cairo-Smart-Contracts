@@ -18,9 +18,9 @@ use starknet::ContractAddress;
 // Constants
 // =============================================================================
 
-const DEFAULT_DRIP_AMOUNT: u256 = 1000_000000000000000000; // 1,000 CIRO
+const DEFAULT_DRIP_AMOUNT: u256 = 20_000000000000000; // 0.02 CIRO (supply conscious)
 const DEFAULT_COOLDOWN: u64 = 86400; // 24 hours in seconds
-const MAX_DRIP_AMOUNT: u256 = 10000_000000000000000000; // 10,000 CIRO max
+const MAX_DRIP_AMOUNT: u256 = 100_000000000000000000; // 100 CIRO max (admin override)
 
 // =============================================================================
 // Data Types
