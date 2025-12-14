@@ -20,3 +20,5 @@
 pub mod fee_manager;
 pub mod collateral;
 pub mod escrow;
+pub mod vesting;
+pub mod pricing;
