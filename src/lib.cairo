@@ -51,6 +51,9 @@ pub mod obelysk;
 // Prover staking for GPU workers
 pub mod staking;
 
+// Testnet faucet for token distribution
+pub mod faucet;
+
 // Economics (based on BitSage Financial Model v2)
 // - Fee Management (20% protocol fee, 70/20/10 split)
 // - Collateral System
