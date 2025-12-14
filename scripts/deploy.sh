@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CIRO Network Smart Contracts - MVP Deployment Script
+# SAGE Network Smart Contracts - MVP Deployment Script
 # This script automates the deployment of upgradeable contracts using proxy patterns
 
 set -e  # Exit on any error
@@ -24,7 +24,7 @@ DRY_RUN=${DRY_RUN:-false}
 
 print_header() {
     echo -e "${BLUE}================================================${NC}"
-    echo -e "${BLUE}  CIRO Network Smart Contract Deployment${NC}"
+    echo -e "${BLUE}  SAGE Network Smart Contract Deployment${NC}"
     echo -e "${BLUE}================================================${NC}"
     echo ""
 }
@@ -104,34 +104,34 @@ deploy_implementations() {
     
     if [ "$DRY_RUN" = true ]; then
         print_info "DRY RUN: Would deploy implementation contracts"
-        CIRO_TOKEN_CLASS="0x1234567890abcdef"
+        SAGE_TOKEN_CLASS="0x1234567890abcdef"
         JOB_MANAGER_CLASS="0x1234567890abcdef" 
         CDC_POOL_CLASS="0x1234567890abcdef"
         return
     fi
     
-    # Deploy CIRO Token implementation
-    print_info "Deploying CIRO Token implementation..."
-    if [ -f "$target_dir/ciro_contracts_CIROToken.contract_class.json" ]; then
-        CIRO_TOKEN_CLASS=$(starkli declare \
+    # Deploy SAGE Token implementation
+    print_info "Deploying SAGE Token implementation..."
+    if [ -f "$target_dir/sage_contracts_SAGEToken.contract_class.json" ]; then
+        SAGE_TOKEN_CLASS=$(starkli declare \
             --keystore "$DEPLOYER_KEYSTORE" \
             --network "$NETWORK" \
             --max-fee 0.01 \
-            "$target_dir/ciro_contracts_CIROToken.contract_class.json" 2>/dev/null | tail -1)
-        print_success "CIRO Token implementation deployed: $CIRO_TOKEN_CLASS"
+            "$target_dir/sage_contracts_SAGEToken.contract_class.json" 2>/dev/null | tail -1)
+        print_success "SAGE Token implementation deployed: $SAGE_TOKEN_CLASS"
     else
-        print_error "CIRO Token contract class not found!"
+        print_error "SAGE Token contract class not found!"
         exit 1
     fi
     
     # Deploy Job Manager implementation
     print_info "Deploying Job Manager implementation..."
-    if [ -f "$target_dir/ciro_contracts_JobManagerContract.contract_class.json" ]; then
+    if [ -f "$target_dir/sage_contracts_JobManagerContract.contract_class.json" ]; then
         JOB_MANAGER_CLASS=$(starkli declare \
             --keystore "$DEPLOYER_KEYSTORE" \
             --network "$NETWORK" \
             --max-fee 0.01 \
-            "$target_dir/ciro_contracts_JobManagerContract.contract_class.json" 2>/dev/null | tail -1)
+            "$target_dir/sage_contracts_JobManagerContract.contract_class.json" 2>/dev/null | tail -1)
         print_success "Job Manager implementation deployed: $JOB_MANAGER_CLASS"
     else
         print_error "Job Manager contract class not found!"
@@ -140,12 +140,12 @@ deploy_implementations() {
     
     # Deploy CDC Pool implementation
     print_info "Deploying CDC Pool implementation..."
-    if [ -f "$target_dir/ciro_contracts_CDCPool.contract_class.json" ]; then
+    if [ -f "$target_dir/sage_contracts_CDCPool.contract_class.json" ]; then
         CDC_POOL_CLASS=$(starkli declare \
             --keystore "$DEPLOYER_KEYSTORE" \
             --network "$NETWORK" \
             --max-fee 0.01 \
-            "$target_dir/ciro_contracts_CDCPool.contract_class.json" 2>/dev/null | tail -1)
+            "$target_dir/sage_contracts_CDCPool.contract_class.json" 2>/dev/null | tail -1)
         print_success "CDC Pool implementation deployed: $CDC_POOL_CLASS"
     else
         print_error "CDC Pool contract class not found!"
@@ -160,7 +160,7 @@ deploy_proxy_contracts() {
     
     if [ "$DRY_RUN" = true ]; then
         print_info "DRY RUN: Would deploy proxy contracts"
-        CIRO_TOKEN_PROXY="0x1234567890abcdef"
+        SAGE_TOKEN_PROXY="0x1234567890abcdef"
         JOB_MANAGER_PROXY="0x1234567890abcdef"
         CDC_POOL_PROXY="0x1234567890abcdef"
         return
@@ -170,15 +170,15 @@ deploy_proxy_contracts() {
     # In production, you'd use actual proxy contracts
     print_info "Note: Using direct deployment for MVP. Upgrade via new deployments."
     
-    # Deploy CIRO Token
-    print_info "Deploying CIRO Token proxy..."
-    CIRO_TOKEN_PROXY=$(starkli deploy \
+    # Deploy SAGE Token
+    print_info "Deploying SAGE Token proxy..."
+    SAGE_TOKEN_PROXY=$(starkli deploy \
         --keystore "$DEPLOYER_KEYSTORE" \
         --network "$NETWORK" \
         --max-fee 0.01 \
-        "$CIRO_TOKEN_CLASS" \
+        "$SAGE_TOKEN_CLASS" \
         "$DEPLOYER_ADDRESS" 2>/dev/null | tail -1)
-    print_success "CIRO Token proxy deployed: $CIRO_TOKEN_PROXY"
+    print_success "SAGE Token proxy deployed: $SAGE_TOKEN_PROXY"
     
     # Deploy Job Manager  
     print_info "Deploying Job Manager proxy..."
@@ -188,7 +188,7 @@ deploy_proxy_contracts() {
         --max-fee 0.01 \
         "$JOB_MANAGER_CLASS" \
         "$DEPLOYER_ADDRESS" \
-        "$CIRO_TOKEN_PROXY" 2>/dev/null | tail -1)
+        "$SAGE_TOKEN_PROXY" 2>/dev/null | tail -1)
     print_success "Job Manager proxy deployed: $JOB_MANAGER_PROXY"
     
     # Deploy CDC Pool
@@ -199,7 +199,7 @@ deploy_proxy_contracts() {
         --max-fee 0.01 \
         "$CDC_POOL_CLASS" \
         "$DEPLOYER_ADDRESS" \
-        "$CIRO_TOKEN_PROXY" \
+        "$SAGE_TOKEN_PROXY" \
         "$JOB_MANAGER_PROXY" 2>/dev/null | tail -1)
     print_success "CDC Pool proxy deployed: $CDC_POOL_PROXY"
     
@@ -218,7 +218,7 @@ verify_deployment() {
     
     # Add verification calls here when contracts are fixed
     # For now, just check if addresses were generated
-    if [ -n "$CIRO_TOKEN_PROXY" ] && [ -n "$JOB_MANAGER_PROXY" ] && [ -n "$CDC_POOL_PROXY" ]; then
+    if [ -n "$SAGE_TOKEN_PROXY" ] && [ -n "$JOB_MANAGER_PROXY" ] && [ -n "$CDC_POOL_PROXY" ]; then
         print_success "All contracts deployed successfully!"
     else
         print_error "Some contracts failed to deploy!"
@@ -239,9 +239,9 @@ save_deployment_info() {
   "deployed_at": "$timestamp",
   "deployer": "$DEPLOYER_ADDRESS",
   "contracts": {
-    "ciro_token": {
-      "proxy": "$CIRO_TOKEN_PROXY",
-      "implementation": "$CIRO_TOKEN_CLASS"
+    "sage_token": {
+      "proxy": "$SAGE_TOKEN_PROXY",
+      "implementation": "$SAGE_TOKEN_CLASS"
     },
     "job_manager": {
       "proxy": "$JOB_MANAGER_PROXY", 
@@ -269,7 +269,7 @@ print_summary() {
     echo -e "${GREEN}🎉 Deployment Completed Successfully!${NC}"
     echo ""
     echo -e "${YELLOW}📋 Contract Addresses:${NC}"
-    echo -e "   CIRO Token:   ${BLUE}$CIRO_TOKEN_PROXY${NC}"
+    echo -e "   SAGE Token:   ${BLUE}$SAGE_TOKEN_PROXY${NC}"
     echo -e "   Job Manager:  ${BLUE}$JOB_MANAGER_PROXY${NC}" 
     echo -e "   CDC Pool:     ${BLUE}$CDC_POOL_PROXY${NC}"
     echo ""
@@ -285,7 +285,7 @@ print_summary() {
 }
 
 show_help() {
-    echo "CIRO Network Smart Contract Deployment Script"
+    echo "SAGE Network Smart Contract Deployment Script"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""

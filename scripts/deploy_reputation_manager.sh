@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# CIRO Network Reputation Manager Deployment Script
+# SAGE Network Reputation Manager Deployment Script
 # Deploys the ReputationManager contract with proper integration
-# Uses keystore and deployment patterns from CIRO_Network_Backup
+# Uses keystore and deployment patterns from SAGE_Network_Backup
 
 set -e  # Exit on any error
 
@@ -17,13 +17,13 @@ NC='\033[0m' # No Color
 
 # Configuration
 NETWORK="sepolia"
-KEYSTORE_PATH="../CIRO_Network_Backup/20250711_061352/testnet_keystore.json"
+KEYSTORE_PATH="../SAGE_Network_Backup/20250711_061352/testnet_keystore.json"
 RPC_URL="https://starknet-sepolia.public.blastapi.io"
 EXPLORER_URL="https://sepolia.starkscan.co"
 
 # Contract build artifacts
 CONTRACTS_DIR="target/dev"
-REPUTATION_MANAGER_ARTIFACT="ciro_contracts_ReputationManager"
+REPUTATION_MANAGER_ARTIFACT="sage_contracts_ReputationManager"
 
 # Deployment tracking
 DEPLOYMENT_LOG="reputation_manager_deployment_$(date +%Y%m%d_%H%M%S).log"
@@ -41,7 +41,7 @@ UPDATE_RATE_LIMIT=300  # 5 minutes between reputation updates
 # Functions
 print_header() {
     echo -e "\n${PURPLE}======================================${NC}"
-    echo -e "${PURPLE}  CIRO Network Reputation Manager${NC}"
+    echo -e "${PURPLE}  SAGE Network Reputation Manager${NC}"
     echo -e "${PURPLE}  Testnet Deployment Script${NC}"
     echo -e "${PURPLE}  $(date)${NC}"
     echo -e "${PURPLE}======================================${NC}\n"
@@ -147,11 +147,11 @@ declare_contract() {
         print_status "Declaration attempt $((retry_count + 1))..."
         
         # Debug: Show the actual command being run
-        echo "Running: starkli declare $contract_file --account ../CIRO_Network_Backup/20250711_061352/internal_docs/testnet_account.json --keystore $KEYSTORE_PATH --rpc $RPC_URL --network $NETWORK"
+        echo "Running: starkli declare $contract_file --account ../SAGE_Network_Backup/20250711_061352/internal_docs/testnet_account.json --keystore $KEYSTORE_PATH --rpc $RPC_URL --network $NETWORK"
         
         # Capture full output to see errors
         declare_output=$(starkli declare "$contract_file" \
-            --account "../CIRO_Network_Backup/20250711_061352/internal_docs/testnet_account.json" \
+            --account "../SAGE_Network_Backup/20250711_061352/internal_docs/testnet_account.json" \
             --keystore "$KEYSTORE_PATH" \
             --rpc "$RPC_URL" \
             --network "$NETWORK" 2>&1)
@@ -324,7 +324,7 @@ print_summary() {
 }
 
 show_help() {
-    echo "CIRO Network Reputation Manager Deployment Script"
+    echo "SAGE Network Reputation Manager Deployment Script"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""

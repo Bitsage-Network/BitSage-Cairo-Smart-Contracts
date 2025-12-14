@@ -1,4 +1,4 @@
-// CIRO Network Contract Interactions Utilities
+// SAGE Network Contract Interactions Utilities
 // Simple utility functions for contract interactions and validation
 
 use starknet::ContractAddress;

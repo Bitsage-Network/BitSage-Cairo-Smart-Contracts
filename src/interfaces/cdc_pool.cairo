@@ -87,14 +87,14 @@ pub enum WorkerTier {
     Institutional,  // $500,000 - institutional grade
 }
 
-/// Large Holder Tier Enumeration (CIRO-Fixed with USD floors) 
+/// Large Holder Tier Enumeration (SAGE-Fixed with USD floors) 
 #[derive(Copy, Drop, Serde, starknet::Store)]
 #[allow(starknet::store_no_default_variant)]
 pub enum HolderTier {
-    Regular,        // < 5M CIRO
-    Whale,          // 5M+ CIRO + $2M+ USD value
-    Institution,    // 25M+ CIRO + $10M+ USD value
-    HyperWhale,     // 100M+ CIRO + $50M+ USD value
+    Regular,        // < 5M SAGE
+    Whale,          // 5M+ SAGE + $2M+ USD value
+    Institution,    // 25M+ SAGE + $10M+ USD value
+    HyperWhale,     // 100M+ SAGE + $50M+ USD value
 }
 
 /// Worker Tier Benefits
@@ -110,7 +110,7 @@ pub struct WorkerTierBenefits {
 /// Enhanced Stake Info with Tiers
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct StakeInfo {
-    pub amount: u256,           // CIRO tokens staked
+    pub amount: u256,           // SAGE tokens staked
     pub usd_value: u256,        // Current USD value in cents
     pub tier: WorkerTier,       // Current staking tier
     pub locked_until: u64,      // Lock expiration timestamp
@@ -507,13 +507,13 @@ pub trait ICDCPool<TContractState> {
     /// @return usd_value: USD value in cents
     fn get_stake_usd_value(self: @TContractState, worker: ContractAddress) -> u256;
     
-    /// Get CIRO token requirement for a tier
+    /// Get SAGE token requirement for a tier
     /// @param tier: Worker tier to query
-    /// @return requirement: CIRO tokens required
+    /// @return requirement: SAGE tokens required
     fn get_tier_ciro_requirement(self: @TContractState, tier: WorkerTier) -> u256;
     
-    /// Update CIRO price (oracle function)
-    /// @param new_price: New CIRO price in USD cents
+    /// Update SAGE price (oracle function)
+    /// @param new_price: New SAGE price in USD cents
     fn update_ciro_price(ref self: TContractState, new_price: u256);
     
     /// Check if worker meets tier requirements

@@ -1,5 +1,5 @@
 //! Treasury Timelock Contract
-//! CIRO Network - Secure Multi-Sig Treasury Management
+//! SAGE Network - Secure Multi-Sig Treasury Management
 //! Implements timelocked operations with multi-signature approval
 
 use starknet::{ContractAddress, get_caller_address, get_block_timestamp};

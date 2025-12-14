@@ -1,4 +1,4 @@
-//! Reputation Manager Interface for CIRO Network
+//! Reputation Manager Interface for SAGE Network
 //! Central reputation management system for worker ranking and job allocation
 
 /// Reputation score with detailed tracking

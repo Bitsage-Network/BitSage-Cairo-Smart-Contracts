@@ -1,7 +1,7 @@
-//! Reputation Manager Implementation for CIRO Network
+//! Reputation Manager Implementation for SAGE Network
 //! Minimal implementation for deployment testing
 
-use ciro_contracts::interfaces::reputation_manager::{
+use sage_contracts::interfaces::reputation_manager::{
     ReputationScore, ReputationReason, ReputationThreshold
 };
 
@@ -34,7 +34,7 @@ pub trait IReputationManager<TContractState> {
 pub mod ReputationManager {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
-    use ciro_contracts::interfaces::reputation_manager::{
+    use sage_contracts::interfaces::reputation_manager::{
         ReputationScore, ReputationReason, ReputationThreshold
     };
 

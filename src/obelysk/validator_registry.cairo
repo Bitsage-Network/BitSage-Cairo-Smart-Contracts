@@ -20,7 +20,7 @@ use starknet::ContractAddress;
 // =============================================================================
 
 const MAX_VALIDATORS: u64 = 100;          // Maximum active validators
-const MIN_VALIDATOR_STAKE: u256 = 10000_000000000000000000; // 10,000 CIRO
+const MIN_VALIDATOR_STAKE: u256 = 10000_000000000000000000; // 10,000 SAGE
 
 // =============================================================================
 // Data Types
@@ -198,8 +198,8 @@ mod ValidatorRegistry {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Collateral contract
         collateral_contract: ContractAddress,
         /// Staking contract
@@ -331,10 +331,10 @@ mod ValidatorRegistry {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.current_epoch.write(1);
         self.active_count.write(0);
         self.total_validators.write(0);
@@ -463,7 +463,7 @@ mod ValidatorRegistry {
             assert(validator.address != zero_addr, 'Not registered');
             
             // Transfer tokens
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(caller, starknet::get_contract_address(), amount);
             
             validator.self_stake = validator.self_stake + amount;
@@ -529,7 +529,7 @@ mod ValidatorRegistry {
             self.stats.write(stats);
             
             // Transfer tokens back (would go through unbonding in production)
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, amount);
             
             self.emit(StakeRemoved {

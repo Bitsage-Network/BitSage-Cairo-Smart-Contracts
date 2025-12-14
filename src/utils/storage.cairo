@@ -1,4 +1,4 @@
-// CIRO Network Storage Utilities
+// SAGE Network Storage Utilities
 // Optimized storage patterns for gas efficiency and functionality
 
 use starknet::ContractAddress;

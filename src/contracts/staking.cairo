@@ -54,7 +54,7 @@ mod WorkerStaking {
     struct Storage {
         // Admin & config
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         job_manager: ContractAddress,
         
         // Staking parameters
@@ -136,12 +136,12 @@ mod WorkerStaking {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         treasury: ContractAddress,
         burn_address: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.treasury.write(treasury);
         self.burn_address.write(burn_address);
         
@@ -150,11 +150,11 @@ mod WorkerStaking {
         self.unbonding_period.write(1209600); // 14 days in seconds
         self.emergency_exit_penalty_bps.write(1000); // 10% penalty
         
-        // Set base stakes (in CIRO with 18 decimals)
-        self.base_stakes.write(0, 10000000000000000000000); // Consumer: 10,000 CIRO
-        self.base_stakes.write(1, 50000000000000000000000); // DataCenter: 50,000 CIRO
-        self.base_stakes.write(2, 100000000000000000000000); // Enterprise: 100,000 CIRO
-        self.base_stakes.write(3, 200000000000000000000000); // NextGen: 200,000 CIRO
+        // Set base stakes (in SAGE with 18 decimals)
+        self.base_stakes.write(0, 10000000000000000000000); // Consumer: 10,000 SAGE
+        self.base_stakes.write(1, 50000000000000000000000); // DataCenter: 50,000 SAGE
+        self.base_stakes.write(2, 100000000000000000000000); // Enterprise: 100,000 SAGE
+        self.base_stakes.write(3, 200000000000000000000000); // NextGen: 200,000 SAGE
     }
 
     #[abi(embed_v0)]
@@ -178,7 +178,7 @@ mod WorkerStaking {
             assert!(existing_stake.amount == 0, "Worker already staked");
             
             // Transfer tokens from caller to contract
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let success = token.transfer_from(caller, starknet::get_contract_address(), amount);
             assert!(success, "Token transfer failed");
             
@@ -220,7 +220,7 @@ mod WorkerStaking {
             assert!(stake_info.status == StakeStatus::Active, "Stake not active");
             
             // Transfer additional tokens
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let success = token.transfer_from(caller, starknet::get_contract_address(), additional_amount);
             assert!(success, "Token transfer failed");
             
@@ -270,7 +270,7 @@ mod WorkerStaking {
             assert!(get_block_timestamp() >= stake_info.unbond_time, "Unbonding period not complete");
             
             // Transfer tokens back
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let success = token.transfer(caller, stake_info.amount);
             assert!(success, "Token transfer failed");
             
@@ -312,7 +312,7 @@ mod WorkerStaking {
             let return_amount = stake_info.amount - penalty;
             
             // Transfer tokens
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, return_amount);
             
             // Burn penalty
@@ -364,7 +364,7 @@ mod WorkerStaking {
             let to_treasury = slash_amount - to_challenger - to_burn;
             
             // Transfer tokens
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             if to_challenger > 0 && !challenger.is_zero() {
                 token.transfer(challenger, to_challenger);
             }

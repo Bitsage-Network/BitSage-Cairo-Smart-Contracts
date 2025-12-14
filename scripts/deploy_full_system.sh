@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CIRO Network - Complete System Deployment Script
+# SAGE Network - Complete System Deployment Script
 # Deploys all core contracts in correct order with proper dependencies
 # Based on successful Reputation Manager deployment pattern
 
@@ -22,7 +22,7 @@ LOG_FILE="$PROJECT_ROOT/deployment_$(date +%Y%m%d_%H%M%S).log"
 # Default values - can be overridden by environment variables
 NETWORK=${NETWORK:-"sepolia"}
 ACCOUNT_CONFIG=${ACCOUNT_CONFIG:-"temp_account.json"}
-KEYSTORE_PATH=${KEYSTORE_PATH:-"../CIRO_Network_Backup/20250711_061352/testnet_keystore.json"}
+KEYSTORE_PATH=${KEYSTORE_PATH:-"../SAGE_Network_Backup/20250711_061352/testnet_keystore.json"}
 DRY_RUN=${DRY_RUN:-false}
 
 # Logging function
@@ -34,11 +34,11 @@ log() {
 
 print_header() {
     echo -e "${BLUE}======================================================${NC}"
-    echo -e "${BLUE}  CIRO Network - Complete System Deployment${NC}"
+    echo -e "${BLUE}  SAGE Network - Complete System Deployment${NC}"
     echo -e "${BLUE}  $(date)${NC}"
     echo -e "${BLUE}======================================================${NC}"
     echo ""
-    log "Starting CIRO Network deployment"
+    log "Starting SAGE Network deployment"
 }
 
 print_step() {
@@ -194,28 +194,28 @@ deploy_core_contracts() {
     
     local target_dir="$PROJECT_ROOT/target/dev"
     
-    # Declare CIRO Token
-    CIRO_TOKEN_CLASS=$(declare_contract "CIRO Token" "$target_dir/ciro_contracts_CIROToken.contract_class.json")
+    # Declare SAGE Token
+    SAGE_TOKEN_CLASS=$(declare_contract "SAGE Token" "$target_dir/sage_contracts_SAGEToken.contract_class.json")
     
     # Declare Job Manager
-    JOB_MANAGER_CLASS=$(declare_contract "Job Manager" "$target_dir/ciro_contracts_JobManager.contract_class.json")
+    JOB_MANAGER_CLASS=$(declare_contract "Job Manager" "$target_dir/sage_contracts_JobManager.contract_class.json")
     
     # Declare CDC Pool
-    CDC_POOL_CLASS=$(declare_contract "CDC Pool" "$target_dir/ciro_contracts_CDCPool.contract_class.json")
+    CDC_POOL_CLASS=$(declare_contract "CDC Pool" "$target_dir/sage_contracts_CDCPool.contract_class.json")
     
     # Declare Reputation Manager
-    REPUTATION_MANAGER_CLASS=$(declare_contract "Reputation Manager" "$target_dir/ciro_contracts_ReputationManager.contract_class.json")
+    REPUTATION_MANAGER_CLASS=$(declare_contract "Reputation Manager" "$target_dir/sage_contracts_ReputationManager.contract_class.json")
     
     # Declare Governance Treasury
-    GOVERNANCE_TREASURY_CLASS=$(declare_contract "Governance Treasury" "$target_dir/ciro_contracts_GovernanceTreasury.contract_class.json")
+    GOVERNANCE_TREASURY_CLASS=$(declare_contract "Governance Treasury" "$target_dir/sage_contracts_GovernanceTreasury.contract_class.json")
     
     # Declare Treasury Timelock
-    TREASURY_TIMELOCK_CLASS=$(declare_contract "Treasury Timelock" "$target_dir/ciro_contracts_TreasuryTimelock.contract_class.json")
+    TREASURY_TIMELOCK_CLASS=$(declare_contract "Treasury Timelock" "$target_dir/sage_contracts_TreasuryTimelock.contract_class.json")
     
     # Declare Vesting Contracts
-    LINEAR_VESTING_CLASS=$(declare_contract "Linear Vesting" "$target_dir/ciro_contracts_LinearVestingWithCliff.contract_class.json")
-    MILESTONE_VESTING_CLASS=$(declare_contract "Milestone Vesting" "$target_dir/ciro_contracts_MilestoneVesting.contract_class.json")
-    BURN_MANAGER_CLASS=$(declare_contract "Burn Manager" "$target_dir/ciro_contracts_BurnManager.contract_class.json")
+    LINEAR_VESTING_CLASS=$(declare_contract "Linear Vesting" "$target_dir/sage_contracts_LinearVestingWithCliff.contract_class.json")
+    MILESTONE_VESTING_CLASS=$(declare_contract "Milestone Vesting" "$target_dir/sage_contracts_MilestoneVesting.contract_class.json")
+    BURN_MANAGER_CLASS=$(declare_contract "Burn Manager" "$target_dir/sage_contracts_BurnManager.contract_class.json")
     
     echo ""
 }
@@ -226,13 +226,13 @@ deploy_contract_instances() {
     # Get deployer address
     DEPLOYER_ADDRESS=$(echo "test" | starkli account address --account "$ACCOUNT_CONFIG" --keystore "$KEYSTORE_PATH" 2>/dev/null || echo "0x02f5248a6b08cd6a52cb9db812e98c675be165cf803a56ac06aefbce74d1f2ca")
     
-    # Deploy CIRO Token (constructor: admin)
-    print_info "Deploying CIRO Token instance..."
-    CIRO_TOKEN_ADDRESS=$(deploy_contract "CIRO Token" "$CIRO_TOKEN_CLASS" "$DEPLOYER_ADDRESS")
+    # Deploy SAGE Token (constructor: admin)
+    print_info "Deploying SAGE Token instance..."
+    SAGE_TOKEN_ADDRESS=$(deploy_contract "SAGE Token" "$SAGE_TOKEN_CLASS" "$DEPLOYER_ADDRESS")
     
     # Deploy Governance Treasury (constructor: admin, token)
     print_info "Deploying Governance Treasury instance..."
-    GOVERNANCE_TREASURY_ADDRESS=$(deploy_contract "Governance Treasury" "$GOVERNANCE_TREASURY_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS")
+    GOVERNANCE_TREASURY_ADDRESS=$(deploy_contract "Governance Treasury" "$GOVERNANCE_TREASURY_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS")
     
     # Note: Treasury Timelock requires Array parameters which are complex for shell scripts
     # It will need to be deployed manually or with a custom deployment script
@@ -241,11 +241,11 @@ deploy_contract_instances() {
     # Deploy Job Manager (constructor: admin, payment_token, treasury, cdc_pool)
     # We'll use a placeholder for CDC Pool and update later
     print_info "Deploying Job Manager instance..."
-    JOB_MANAGER_ADDRESS=$(deploy_contract "Job Manager" "$JOB_MANAGER_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS" "0x0")
+    JOB_MANAGER_ADDRESS=$(deploy_contract "Job Manager" "$JOB_MANAGER_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS" "0x0")
     
     # Deploy CDC Pool (constructor: admin, token, job_manager)
     print_info "Deploying CDC Pool instance..."
-    CDC_POOL_ADDRESS=$(deploy_contract "CDC Pool" "$CDC_POOL_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$JOB_MANAGER_ADDRESS")
+    CDC_POOL_ADDRESS=$(deploy_contract "CDC Pool" "$CDC_POOL_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$JOB_MANAGER_ADDRESS")
     
     # Deploy Reputation Manager (constructor: admin, cdc_pool, job_manager, update_rate_limit)
     print_info "Deploying Reputation Manager instance..."
@@ -253,15 +253,15 @@ deploy_contract_instances() {
     
     # Deploy Linear Vesting (constructor: admin, token, governance)
     print_info "Deploying Linear Vesting instance..."
-    LINEAR_VESTING_ADDRESS=$(deploy_contract "Linear Vesting" "$LINEAR_VESTING_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS")
+    LINEAR_VESTING_ADDRESS=$(deploy_contract "Linear Vesting" "$LINEAR_VESTING_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS")
     
     # Deploy Milestone Vesting (constructor: admin, token, governance)
     print_info "Deploying Milestone Vesting instance..."
-    MILESTONE_VESTING_ADDRESS=$(deploy_contract "Milestone Vesting" "$MILESTONE_VESTING_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS")
+    MILESTONE_VESTING_ADDRESS=$(deploy_contract "Milestone Vesting" "$MILESTONE_VESTING_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS")
     
     # Deploy Burn Manager (constructor: admin, token, treasury)
     print_info "Deploying Burn Manager instance..."
-    BURN_MANAGER_ADDRESS=$(deploy_contract "Burn Manager" "$BURN_MANAGER_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS")
+    BURN_MANAGER_ADDRESS=$(deploy_contract "Burn Manager" "$BURN_MANAGER_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS")
     
     echo ""
 }
@@ -278,7 +278,7 @@ verify_deployment() {
     
     # Check if all addresses were generated
     local contracts=(
-        "CIRO_TOKEN_ADDRESS"
+        "SAGE_TOKEN_ADDRESS"
         "JOB_MANAGER_ADDRESS" 
         "CDC_POOL_ADDRESS"
         "REPUTATION_MANAGER_ADDRESS"
@@ -313,9 +313,9 @@ save_deployment_info() {
   "account_config": "$ACCOUNT_CONFIG",
   "keystore": "$KEYSTORE_PATH",
   "contracts": {
-    "ciro_token": {
-      "address": "$CIRO_TOKEN_ADDRESS",
-      "class_hash": "$CIRO_TOKEN_CLASS"
+    "sage_token": {
+      "address": "$SAGE_TOKEN_ADDRESS",
+      "class_hash": "$SAGE_TOKEN_CLASS"
     },
     "job_manager": {
       "address": "$JOB_MANAGER_ADDRESS",
@@ -362,10 +362,10 @@ EOF
 print_summary() {
     print_step "7" "Deployment Summary"
     
-    echo -e "${GREEN}🎉 CIRO Network Deployment Completed Successfully!${NC}"
+    echo -e "${GREEN}🎉 SAGE Network Deployment Completed Successfully!${NC}"
     echo ""
     echo -e "${YELLOW}📋 Core Contract Addresses:${NC}"
-    echo -e "   CIRO Token:           ${BLUE}$CIRO_TOKEN_ADDRESS${NC}"
+    echo -e "   SAGE Token:           ${BLUE}$SAGE_TOKEN_ADDRESS${NC}"
     echo -e "   Job Manager:          ${BLUE}$JOB_MANAGER_ADDRESS${NC}" 
     echo -e "   CDC Pool:             ${BLUE}$CDC_POOL_ADDRESS${NC}"
     echo -e "   Reputation Manager:   ${BLUE}$REPUTATION_MANAGER_ADDRESS${NC}"
@@ -390,7 +390,7 @@ print_summary() {
 }
 
 show_help() {
-    echo "CIRO Network Complete System Deployment Script"
+    echo "SAGE Network Complete System Deployment Script"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -463,7 +463,7 @@ main() {
     save_deployment_info
     print_summary
     
-    log "CIRO Network deployment completed successfully"
+    log "SAGE Network deployment completed successfully"
 }
 
 # Handle script interruption

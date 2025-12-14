@@ -1,7 +1,7 @@
 {
   "token": "0x0662c81332894247404fff35313f84d0d832b5eeaaaa6f58e6d32c4dd66d279a",
   "amount_decimals": 18,
-  "per_recipient_ciro": 9999,
+  "per_recipient_sage": 9999,
   "recipients": [
     {
       "address": "0x04fabf7bacf1a37c6fb7e2ff8fceeacde693c334f0a92c8b55634220db682042",

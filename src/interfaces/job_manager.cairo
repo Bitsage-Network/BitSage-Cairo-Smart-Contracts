@@ -1,7 +1,7 @@
-//! Enhanced Job Manager Interface for CIRO Network
+//! Enhanced Job Manager Interface for SAGE Network
 //! Supports both AI computation and ZK proof generation workloads
 //! 
-//! Strategic Vision: CIRO as permissionless GPU "power plant" serving:
+//! Strategic Vision: SAGE as permissionless GPU "power plant" serving:
 //! 1. AI/ML training & inference (market-based $/GPU-hour)
 //! 2. ZK proof generation for Starknet (deterministic $/batch)
 

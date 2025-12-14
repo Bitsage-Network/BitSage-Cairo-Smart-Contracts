@@ -1,8 +1,8 @@
 #[starknet::contract]
 mod ProofVerifier {
-    use ciro_contracts::interfaces::proof_verifier::IProofVerifier;
+    use sage_contracts::interfaces::proof_verifier::IProofVerifier;
     // Import types from interface
-    use ciro_contracts::interfaces::proof_verifier::{
+    use sage_contracts::interfaces::proof_verifier::{
         ProofJobId, ProofJobSpec, ProofSubmission, ProofStatus, ProofType, 
         ProverMetrics, ProofEconomics, BatchHash, ProofHash, ProofPriority, WorkerId
     };

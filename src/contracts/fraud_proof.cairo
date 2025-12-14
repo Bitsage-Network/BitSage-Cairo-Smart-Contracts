@@ -10,8 +10,8 @@ mod FraudProof {
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
-    use ciro_contracts::interfaces::proof_verifier::{IProofVerifierDispatcher, IProofVerifierDispatcherTrait, ProofJobId, ProofStatus};
-    use ciro_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
+    use sage_contracts::interfaces::proof_verifier::{IProofVerifierDispatcher, IProofVerifierDispatcherTrait, ProofJobId, ProofStatus};
+    use sage_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
 
     // Challenge status
     #[derive(Drop, Serde, Copy, PartialEq, starknet::Store)]
@@ -64,10 +64,10 @@ mod FraudProof {
         job_manager: ContractAddress,
         staking_contract: ContractAddress,
         proof_verifier: ContractAddress, // Added for verification
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         
         // Challenge parameters
-        challenge_deposit: u256,        // 500 CIRO
+        challenge_deposit: u256,        // 500 SAGE
         challenge_period: u64,          // 24 hours
         arbitration_period: u64,        // 48 hours
         min_arbitration_threshold: u256, // Min job value for arbitration
@@ -154,19 +154,19 @@ mod FraudProof {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         staking_contract: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.staking_contract.write(staking_contract);
         
         // Set default parameters
-        self.challenge_deposit.write(500000000000000000000); // 500 CIRO
+        self.challenge_deposit.write(500000000000000000000); // 500 SAGE
         self.challenge_period.write(86400); // 24 hours
         self.arbitration_period.write(172800); // 48 hours
-        self.min_arbitration_threshold.write(10000000000000000000000); // 10,000 CIRO
-        self.arbitration_quorum.write(1000000000000000000000); // 1,000 CIRO voting power
+        self.min_arbitration_threshold.write(10000000000000000000000); // 10,000 SAGE
+        self.arbitration_quorum.write(1000000000000000000000); // 1,000 SAGE voting power
         
         // Set slashing penalties
         self.minor_violation_penalty.write(100);   // 1%
@@ -199,7 +199,7 @@ mod FraudProof {
             
             // Require deposit
             let deposit = self.challenge_deposit.read();
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let success = token.transfer_from(challenger, starknet::get_contract_address(), deposit);
             assert!(success, "Deposit transfer failed");
             
@@ -292,8 +292,8 @@ mod FraudProof {
                 "Arbitration period expired"
             );
             
-            // Get voter's voting power (based on staked CIRO)
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            // Get voter's voting power (based on staked SAGE)
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let voting_power = token.balance_of(voter);
             assert!(voting_power > 0, "No voting power");
             
@@ -423,7 +423,7 @@ mod FraudProof {
             staking_dispatcher.slash(challenge.worker_id, penalty_bps, 'fraud_proof', challenge.challenger);
             
             // Reward challenger (50% of slashed amount + deposit back)
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(challenge.challenger, challenge.deposit);
             
             self.emit(ChallengeResolved {
@@ -450,7 +450,7 @@ mod FraudProof {
             self.invalid_challenges.write(self.invalid_challenges.read() + 1);
             
             // Challenger loses deposit (burned or to treasury)
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(self.owner.read(), challenge.deposit); // To treasury
             
             self.emit(ChallengeResolved {

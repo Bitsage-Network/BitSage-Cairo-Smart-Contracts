@@ -170,8 +170,8 @@ mod RewardVesting {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Fee manager (can add work rewards)
         fee_manager: ContractAddress,
         /// Staking contract (can add subsidy rewards)
@@ -240,17 +240,17 @@ mod RewardVesting {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         
         // Default configuration
         self.config.write(VestingConfig {
             work_vesting_epochs: DEFAULT_WORK_VESTING_EPOCHS,
             subsidy_vesting_epochs: DEFAULT_SUBSIDY_VESTING_EPOCHS,
             top_miner_vesting_epochs: DEFAULT_TOP_MINER_VESTING_EPOCHS,
-            min_vest_amount: 1_000000000000000000_u256, // 1 CIRO minimum
+            min_vest_amount: 1_000000000000000000_u256, // 1 SAGE minimum
         });
         
         self.current_epoch.write(1);
@@ -318,7 +318,7 @@ mod RewardVesting {
                 self.stats.write(stats);
                 
                 // Transfer tokens
-                let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+                let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
                 token.transfer(caller, total_claimed);
             }
             
@@ -352,7 +352,7 @@ mod RewardVesting {
             self.stats.write(stats);
             
             // Transfer tokens
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, claimable);
             
             self.emit(RewardClaimed {
@@ -538,7 +538,7 @@ mod RewardVesting {
             self.stats.write(stats);
             
             // Transfer tokens to contract for vesting
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(get_caller_address(), starknet::get_contract_address(), amount);
             
             self.emit(RewardVested {

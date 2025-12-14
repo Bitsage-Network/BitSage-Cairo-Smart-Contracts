@@ -1,6 +1,6 @@
 #!/usr/bin/env starkli
 
-// CIRO Network Reputation Manager Deployment Script
+// SAGE Network Reputation Manager Deployment Script
 // Deploys the ReputationManager contract with proper configuration
 // and integrates with existing CDC Pool and Job Manager contracts
 
@@ -8,7 +8,7 @@ use starknet::{ContractAddress};
 
 // Deployment configuration
 const NETWORK: &str = "sepolia";
-const KEYSTORE_PATH: &str = "CIRO_Network_Backup/20250711_061352/testnet_keystore.json";
+const KEYSTORE_PATH: &str = "SAGE_Network_Backup/20250711_061352/testnet_keystore.json";
 const RPC_URL: &str = "https://starknet-sepolia.public.blastapi.io";
 
 // Contract addresses (from previous deployments)
@@ -21,7 +21,7 @@ const ADMIN_ADDRESS: felt252 = 0x1234567890abcdef1234567890abcdef1234567890abcde
 const UPDATE_RATE_LIMIT: u64 = 300; // 5 minutes between reputation updates
 
 fn main() {
-    println!("🚀 CIRO Network - Reputation Manager Deployment");
+    println!("🚀 SAGE Network - Reputation Manager Deployment");
     println!("===============================================");
     println!();
     
@@ -82,7 +82,7 @@ fn declare_contract() -> felt252 {
     let output = std::process::Command::new("starkli")
         .args(&[
             "declare",
-            "target/dev/ciro_contracts_ReputationManager.contract_class.json",
+            "target/dev/sage_contracts_ReputationManager.contract_class.json",
             "--keystore", KEYSTORE_PATH,
             "--rpc", RPC_URL,
             "--network", NETWORK,

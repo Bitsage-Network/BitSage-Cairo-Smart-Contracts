@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (c) 2025 CIRO Network Foundation
+// Copyright (c) 2025 BitSage Network Foundation
 //
-// This file is part of CIRO Network.
+// This file is part of BitSage Network.
 //
 // Licensed under the Business Source License 1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at:
-//     https://github.com/Ciro-AI-Labs/ciro-network/blob/main/LICENSE-BSL
+//     https://github.com/Bitsage-Network/bitsage-network/blob/main/LICENSE-BSL
 //
 // Change Date: January 1, 2029
 // Change License: Apache License, Version 2.0
-//
-// For more information see: https://github.com/Ciro-AI-Labs/ciro-network/blob/main/WHY_BSL_FOR_CIRO.md
 
 #[starknet::contract]
-pub mod CIROToken {
+pub mod SAGEToken {
     use starknet::{
         ContractAddress, get_caller_address, get_block_timestamp
     };
@@ -27,13 +25,13 @@ pub mod CIROToken {
     use core::array::ArrayTrait;
     use core::num::traits::zero::Zero;
     
-    use ciro_contracts::interfaces::ciro_token::{
-        ICIROToken, GovernanceProposal, BurnEvent, GovernanceRights, GovernanceStats,
+    use sage_contracts::interfaces::sage_token::{
+        ISAGEToken, GovernanceProposal, BurnEvent, GovernanceRights, GovernanceStats,
         SecurityBudget, RateLimitInfo, EmergencyOperation, PendingTransfer,
         ProposalStatus
     };
     use openzeppelin::security::pausable::PausableComponent;
-    use ciro_contracts::utils::constants::{
+    use sage_contracts::utils::constants::{
         TOTAL_SUPPLY, PHASE_BOOTSTRAP,
         VETERAN_HOLDER_MINIMUM_PERIOD, LONG_TERM_HOLDER_MINIMUM_PERIOD,
         VOTING_POWER_MULTIPLIER_LONG_TERM, VOTING_POWER_MULTIPLIER_VETERAN,
@@ -45,8 +43,8 @@ pub mod CIROToken {
     /// Contract constants based on v3.0 tokenomics
     const INITIAL_CIRCULATING: u256 = 50_000_000_000_000_000_000_000_000; // 50M tokens
     const DECIMALS: u8 = 18;
-    const NAME: felt252 = 'CIRO Network Token';
-    const SYMBOL: felt252 = 'CIRO';
+    const NAME: felt252 = 'BitSage Token';
+    const SYMBOL: felt252 = 'SAGE';
     
     /// Security and governance constants (v3.1)
     const MIN_SECURITY_BUDGET_USD: u256 = 2_000_000; // $2M minimum
@@ -546,7 +544,7 @@ pub mod CIROToken {
     }
 
     #[abi(embed_v0)]
-    impl CIROTokenImpl of ICIROToken<ContractState> {
+    impl SAGETokenImpl of ISAGEToken<ContractState> {
         /// ERC20 Standard Functions
         
         fn name(self: @ContractState) -> felt252 {
@@ -1714,7 +1712,7 @@ pub mod CIROToken {
             
             // Initialize large transfer threshold - 10,000 tokens (1% of initial circulation)
             // This allows normal transfers while flagging large movements that need extra security
-            self.large_transfer_threshold.write(10_000_000_000_000_000_000_000); // 10,000 CIRO tokens
+            self.large_transfer_threshold.write(10_000_000_000_000_000_000_000); // 10,000 SAGE tokens
         }
 
         fn _check_and_update_rate_limit(ref self: ContractState, amount: u256) {

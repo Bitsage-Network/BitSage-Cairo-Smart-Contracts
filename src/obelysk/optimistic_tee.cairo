@@ -2,7 +2,7 @@
 mod OptimisticTEE {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
     use core::array::Array;
-    use ciro_contracts::interfaces::proof_verifier::{
+    use sage_contracts::interfaces::proof_verifier::{
         IProofVerifierDispatcher, IProofVerifierDispatcherTrait, ProofJobId, ProofStatus
     };
     use starknet::storage::{

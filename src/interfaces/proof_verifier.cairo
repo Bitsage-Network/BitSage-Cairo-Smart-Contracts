@@ -1,6 +1,6 @@
-//! ZK Proof Verifier Interface for CIRO Network
+//! ZK Proof Verifier Interface for SAGE Network
 //! Handles proof generation jobs for Starknet and other ZK rollups
-//! Critical component for positioning CIRO as blockchain scaling infrastructure
+//! Critical component for positioning SAGE as blockchain scaling infrastructure
 
 use core::array::Array;
 use core::serde::Serde;

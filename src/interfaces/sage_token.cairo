@@ -1,4 +1,4 @@
-//! Enhanced CIRO Token Interface for CIRO Network
+//! Enhanced SAGE Token Interface for BitSage Network
 //! Includes comprehensive DeFi operations, governance, and staking
 
 use starknet::ContractAddress;
@@ -142,9 +142,9 @@ pub struct SecurityAuditReport {
     pub recommendations: felt252,
 }
 
-/// CIRO Token interface extending ERC20 with tokenomics features
+/// SAGE Token interface extending ERC20 with tokenomics features
 #[starknet::interface]
-pub trait ICIROToken<TContractState> {
+pub trait ISAGEToken<TContractState> {
     /// Standard ERC20 Functions
     
     /// Get token name

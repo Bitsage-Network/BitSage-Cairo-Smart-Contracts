@@ -1,4 +1,4 @@
-/// System-wide utility types for CIRO Network contracts
+/// System-wide utility types for SAGE Network contracts
 
 /// Job type enumeration
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]

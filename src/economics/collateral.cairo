@@ -175,8 +175,8 @@ mod Collateral {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Staking contract (authorized to call slash)
         staking_contract: ContractAddress,
         /// Verifier contract (authorized to call slash)
@@ -263,15 +263,15 @@ mod Collateral {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         
         // Default configuration inspired by Gonka
         self.config.write(CollateralConfig {
             base_weight_ratio_bps: BASE_WEIGHT_RATIO_BPS,
-            collateral_per_weight_unit: 1000_000000000000000000_u256, // 1000 CIRO per weight unit
+            collateral_per_weight_unit: 1000_000000000000000000_u256, // 1000 SAGE per weight unit
             grace_period_end_epoch: GRACE_PERIOD_EPOCHS,
             unbonding_period_secs: UNBONDING_PERIOD_SECS,
             slash_invalid_bps: SLASH_INVALID_PROOF_BPS,
@@ -295,7 +295,7 @@ mod Collateral {
             let caller = get_caller_address();
             
             // Transfer tokens to contract
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(caller, starknet::get_contract_address(), amount);
             
             // Update state
@@ -374,7 +374,7 @@ mod Collateral {
             self.total_unbonding_collateral.write(unbonding_total);
             
             // Transfer back to participant
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, amount);
             
             self.emit(WithdrawalCompleted {
@@ -490,7 +490,7 @@ mod Collateral {
                 
                 // Burn slashed tokens (send to dead address)
                 let dead_addr: ContractAddress = 0xdead.try_into().unwrap();
-                let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+                let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
                 token.transfer(dead_addr, slash_amount);
             }
             

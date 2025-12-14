@@ -1,4 +1,4 @@
-// CIRO Network Security Utilities
+// SAGE Network Security Utilities
 // Simple utility functions for security checks and monitoring
 
 use starknet::ContractAddress;

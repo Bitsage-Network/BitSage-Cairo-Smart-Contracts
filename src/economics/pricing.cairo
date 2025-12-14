@@ -265,7 +265,7 @@ mod DynamicPricing {
             stability_upper_bps: STABILITY_ZONE_UPPER_BPS,
             elasticity_bps: PRICE_ELASTICITY_BPS,
             min_price: MIN_PRICE_PER_TOKEN,
-            base_price: 100_000000000000000_u256, // 0.1 CIRO per token
+            base_price: 100_000000000000000_u256, // 0.1 SAGE per token
             utilization_window_epochs: 3,
             grace_period_end_epoch: 90, // ~3 months free
         });

@@ -1,4 +1,4 @@
-// CIRO Network Constants
+// SAGE Network Constants
 // System-wide constants for gas optimization and configuration
 
 /// Security and access control constants
@@ -10,22 +10,22 @@ pub const CLIENT_ROLE: felt252 = 'CLIENT_ROLE'; // Client role
 /// API and pagination constants
 pub const PAGINATION_LIMIT: u32 = 100; // Maximum results per page
 
-/// Tokenomics Constants (CIRO Token)
+/// Tokenomics Constants (SAGE Token)
 pub const TOTAL_SUPPLY: u256 = 1_000_000_000_000_000_000_000_000_000; // 1B tokens with 18 decimals
 pub const MAX_MINT_PERCENTAGE: u32 = 1000; // 10% max mint percentage in basis points
 pub const SCALE: u256 = 1_000_000_000_000_000_000; // 18 decimal scale
 pub const SECONDS_PER_YEAR: u64 = 31536000; // 365 days in seconds
 pub const SECONDS_PER_MONTH: u64 = 2592000; // 30 days in seconds
 
-/// Worker Tier Thresholds (CIRO tokens with 18 decimals)
-pub const BASIC_WORKER_THRESHOLD: u256 = 100_000_000_000_000_000_000; // 100 CIRO
-pub const PREMIUM_WORKER_THRESHOLD: u256 = 500_000_000_000_000_000_000; // 500 CIRO
-pub const ENTERPRISE_WORKER_THRESHOLD: u256 = 2500_000_000_000_000_000_000; // 2,500 CIRO
-pub const INFRASTRUCTURE_WORKER_THRESHOLD: u256 = 10000_000_000_000_000_000_000; // 10,000 CIRO
-pub const FLEET_WORKER_THRESHOLD: u256 = 50000_000_000_000_000_000_000; // 50,000 CIRO
-pub const DATACENTER_WORKER_THRESHOLD: u256 = 100000_000_000_000_000_000_000; // 100,000 CIRO
-pub const HYPERSCALE_WORKER_THRESHOLD: u256 = 250000_000_000_000_000_000_000; // 250,000 CIRO
-pub const INSTITUTIONAL_WORKER_THRESHOLD: u256 = 500000_000_000_000_000_000_000; // 500,000 CIRO
+/// Worker Tier Thresholds (SAGE tokens with 18 decimals)
+pub const BASIC_WORKER_THRESHOLD: u256 = 100_000_000_000_000_000_000; // 100 SAGE
+pub const PREMIUM_WORKER_THRESHOLD: u256 = 500_000_000_000_000_000_000; // 500 SAGE
+pub const ENTERPRISE_WORKER_THRESHOLD: u256 = 2500_000_000_000_000_000_000; // 2,500 SAGE
+pub const INFRASTRUCTURE_WORKER_THRESHOLD: u256 = 10000_000_000_000_000_000_000; // 10,000 SAGE
+pub const FLEET_WORKER_THRESHOLD: u256 = 50000_000_000_000_000_000_000; // 50,000 SAGE
+pub const DATACENTER_WORKER_THRESHOLD: u256 = 100000_000_000_000_000_000_000; // 100,000 SAGE
+pub const HYPERSCALE_WORKER_THRESHOLD: u256 = 250000_000_000_000_000_000_000; // 250,000 SAGE
+pub const INSTITUTIONAL_WORKER_THRESHOLD: u256 = 500000_000_000_000_000_000_000; // 500,000 SAGE
 
 /// Storage optimization constants
 pub const MAX_JOBS_PER_WORKER: u32 = 100;
@@ -58,7 +58,7 @@ pub const JOB_PRIORITY_HIGH: u8 = 3;
 pub const JOB_PRIORITY_URGENT: u8 = 4;
 
 /// Staking and economic constants
-pub const MIN_STAKE_AMOUNT: u256 = 1000_000_000_000_000_000; // 1 CIRO token (legacy)
+pub const MIN_STAKE_AMOUNT: u256 = 1000_000_000_000_000_000; // 1 SAGE token (legacy)
 
 /// USD-Denominated Worker Staking Tiers (v3.1 - Realistic Capital Deployment)
 pub const WORKER_BASIC_USD: u256 = 100_000; // $100 - entry level 
@@ -92,21 +92,21 @@ pub const WORKER_DATACENTER_BONUS_BPS: u256 = 3500; // 35% bonus
 pub const WORKER_HYPERSCALE_BONUS_BPS: u256 = 4000; // 40% bonus
 pub const WORKER_INSTITUTIONAL_BONUS_BPS: u256 = 5000; // 50% bonus
 
-/// Large Holder Tier Thresholds (CIRO tokens) - Realistic Whale Levels
-pub const WHALE_TIER_THRESHOLD: u256 = 5000000_000_000_000_000_000_000; // 5M CIRO (~0.5% supply, $2.5M at launch)
-pub const INSTITUTION_TIER_THRESHOLD: u256 = 25000000_000_000_000_000_000_000; // 25M CIRO (~2.5% supply, $12.5M at launch)
-pub const HYPERWHALE_TIER_THRESHOLD: u256 = 100000000_000_000_000_000_000_000; // 100M CIRO (~10% supply, $50M at launch)
+/// Large Holder Tier Thresholds (SAGE tokens) - Realistic Whale Levels
+pub const WHALE_TIER_THRESHOLD: u256 = 5000000_000_000_000_000_000_000; // 5M SAGE (~0.5% supply, $2.5M at launch)
+pub const INSTITUTION_TIER_THRESHOLD: u256 = 25000000_000_000_000_000_000_000; // 25M SAGE (~2.5% supply, $12.5M at launch)
+pub const HYPERWHALE_TIER_THRESHOLD: u256 = 100000000_000_000_000_000_000_000; // 100M SAGE (~10% supply, $50M at launch)
 
 /// USD Floor Requirements for Governance Tiers (in cents)
 pub const WHALE_USD_FLOOR: u256 = 200000000; // $2M minimum
 pub const INSTITUTION_USD_FLOOR: u256 = 1000000000; // $10M minimum  
 pub const HYPERWHALE_USD_FLOOR: u256 = 5000000000; // $50M minimum
 
-/// Governance Proposal Thresholds (CIRO tokens) - Adjusted for Supply Scale
-pub const GOVERNANCE_MINOR_THRESHOLD: u256 = 50000_000_000_000_000_000_000; // 50K CIRO (minor changes)
-pub const GOVERNANCE_MAJOR_THRESHOLD: u256 = 250000_000_000_000_000_000_000; // 250K CIRO (major changes)
-pub const GOVERNANCE_PROTOCOL_THRESHOLD: u256 = 1000000_000_000_000_000_000_000; // 1M CIRO (protocol upgrades)
-pub const GOVERNANCE_EMERGENCY_THRESHOLD: u256 = 5000000_000_000_000_000_000_000; // 5M CIRO (emergency actions)
+/// Governance Proposal Thresholds (SAGE tokens) - Adjusted for Supply Scale
+pub const GOVERNANCE_MINOR_THRESHOLD: u256 = 50000_000_000_000_000_000_000; // 50K SAGE (minor changes)
+pub const GOVERNANCE_MAJOR_THRESHOLD: u256 = 250000_000_000_000_000_000_000; // 250K SAGE (major changes)
+pub const GOVERNANCE_PROTOCOL_THRESHOLD: u256 = 1000000_000_000_000_000_000_000; // 1M SAGE (protocol upgrades)
+pub const GOVERNANCE_EMERGENCY_THRESHOLD: u256 = 5000000_000_000_000_000_000_000; // 5M SAGE (emergency actions)
 
 /// Whale Tier Benefits (Fee Discounts in Basis Points)
 pub const WHALE_FEE_DISCOUNT_BPS: u256 = 4000; // 40% fee discount

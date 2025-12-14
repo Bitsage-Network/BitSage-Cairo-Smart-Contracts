@@ -55,14 +55,14 @@ pub struct ProverInfo {
     pub proofs_generated: u64,
     /// Is currently active
     pub is_active: bool,
-    /// Stake amount in CIRO tokens
+    /// Stake amount in SAGE tokens
     pub stake: u256,
 }
 
 /// Pricing configuration
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct PricingConfig {
-    /// Base price per proof in CIRO (18 decimals)
+    /// Base price per proof in SAGE (18 decimals)
     pub base_price_per_proof: u256,
     /// Price multiplier for larger proofs (basis points, 10000 = 1x)
     pub size_multiplier: u16,
@@ -173,8 +173,8 @@ pub mod ObelyskProverRegistry {
         /// stwo-cairo-verifier contract address
         verifier_address: ContractAddress,
         
-        /// CIRO token address for payments
-        ciro_token: ContractAddress,
+        /// SAGE token address for payments
+        sage_token: ContractAddress,
         
         /// Proof requests
         next_request_id: u256,
@@ -286,21 +286,21 @@ pub mod ObelyskProverRegistry {
         ref self: ContractState,
         owner: ContractAddress,
         verifier: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         treasury: ContractAddress,
     ) {
         self.owner.write(owner);
         self.verifier_address.write(verifier);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.treasury.write(treasury);
         self.next_request_id.write(1);
         
-        // Default pricing (in CIRO, 18 decimals)
+        // Default pricing (in SAGE, 18 decimals)
         self.pricing.write(PricingConfig {
-            base_price_per_proof: 100_000_000_000_000_000_u256, // 0.1 CIRO
+            base_price_per_proof: 100_000_000_000_000_000_u256, // 0.1 SAGE
             size_multiplier: 10000, // 1x base
             platform_fee_bps: 500,  // 5%
-            min_stake: 1000_000_000_000_000_000_000_u256, // 1000 CIRO
+            min_stake: 1000_000_000_000_000_000_000_u256, // 1000 SAGE
         });
     }
 
@@ -411,8 +411,8 @@ pub mod ObelyskProverRegistry {
             info.stake = new_total;
             self.provers.write(caller, info);
             
-            // TODO: Transfer CIRO tokens from caller to contract
-            // ICiroToken::transfer_from(self.ciro_token.read(), caller, contract_address, amount)
+            // TODO: Transfer SAGE tokens from caller to contract
+            // ICiroToken::transfer_from(self.sage_token.read(), caller, contract_address, amount)
             
             self.emit(ProverStaked { 
                 prover: caller, 
@@ -430,8 +430,8 @@ pub mod ObelyskProverRegistry {
             info.stake = remaining;
             self.provers.write(caller, info);
             
-            // TODO: Transfer CIRO tokens back to prover
-            // ICiroToken::transfer(self.ciro_token.read(), caller, amount)
+            // TODO: Transfer SAGE tokens back to prover
+            // ICiroToken::transfer(self.sage_token.read(), caller, amount)
             
             self.emit(ProverUnstaked { 
                 prover: caller, 
@@ -466,8 +466,8 @@ pub mod ObelyskProverRegistry {
             
             self.proof_requests.write(request_id, request);
             
-            // TODO: Lock CIRO payment from client
-            // ICiroToken::transfer_from(self.ciro_token.read(), caller, contract_address, price)
+            // TODO: Lock SAGE payment from client
+            // ICiroToken::transfer_from(self.sage_token.read(), caller, contract_address, price)
             
             self.emit(ProofRequested { 
                 request_id, 
@@ -522,8 +522,8 @@ pub mod ObelyskProverRegistry {
             // TODO: Pay prover (minus platform fee)
             // let platform_fee = request.price * pricing.platform_fee_bps / 10000;
             // let prover_payment = request.price - platform_fee;
-            // ICiroToken::transfer(self.ciro_token.read(), caller, prover_payment)
-            // ICiroToken::transfer(self.ciro_token.read(), self.treasury.read(), platform_fee)
+            // ICiroToken::transfer(self.sage_token.read(), caller, prover_payment)
+            // ICiroToken::transfer(self.sage_token.read(), self.treasury.read(), platform_fee)
             
             self.emit(ProofVerified { request_id, success: true, prover: caller });
             self.emit(ReputationUpdated { 

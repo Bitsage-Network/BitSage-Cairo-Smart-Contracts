@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (c) 2025 CIRO Network Foundation
+// Copyright (c) 2025 SAGE Network Foundation
 //
-// This file is part of CIRO Network.
+// This file is part of SAGE Network.
 //
 // Licensed under the Business Source License 1.1 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,12 +11,12 @@
 // Change Date: January 1, 2029
 // Change License: Apache License, Version 2.0
 //
-// For more information see: https://github.com/Ciro-AI-Labs/ciro-network/blob/main/WHY_BSL_FOR_CIRO.md
+// For more information see: https://github.com/Ciro-AI-Labs/ciro-network/blob/main/WHY_BSL_FOR_SAGE.md
 
-//! CIRO Distributed Compute (CDC) Pool Contract
+//! SAGE Distributed Compute (CDC) Pool Contract
 //! 
 //! Manages worker registration, staking, reputation, and job allocation
-//! for the CIRO Network compute infrastructure.
+//! for the SAGE Network compute infrastructure.
 
 use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
 use starknet::storage::{
@@ -28,15 +28,15 @@ use starknet::storage::{
 // Using improved storage patterns and validation functions
 
 // Interface imports
-use ciro_contracts::interfaces::cdc_pool::{
+use sage_contracts::interfaces::cdc_pool::{
     ICDCPool, WorkerCapabilities, WorkerProfile, WorkerStatus, PerformanceMetrics,
     StakeInfo, UnstakeRequest, AllocationResult, SlashRecord, SlashReason, WorkerTier,
     WorkerTierBenefits, HolderTier, WorkerRegistered, WorkerDeactivated, WorkerReactivated,
     StakeAdded, UnstakeRequested, UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased
 };
-use ciro_contracts::interfaces::job_manager::{JobId, ModelRequirements, WorkerId};
+use sage_contracts::interfaces::job_manager::{JobId, ModelRequirements, WorkerId};
 
-// Token interface for CIRO token operations
+// Token interface for SAGE token operations
 use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 
 #[starknet::contract]
@@ -59,7 +59,7 @@ mod CDCPool {
     struct Storage {
         // Core contract state
         admin: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         paused: bool,
         
         // Worker management
@@ -103,7 +103,7 @@ mod CDCPool {
         performance_multiplier: u8,
         
         // Tier system
-        ciro_price_usd_cents: u256, // CIRO price in USD cents
+        ciro_price_usd_cents: u256, // SAGE price in USD cents
         tier_usd_requirements: Map<u8, u256>, // tier -> USD requirement in cents
         tier_allocation_bonuses: Map<u8, u256>, // tier -> allocation priority bonus
         
@@ -130,16 +130,16 @@ mod CDCPool {
     fn constructor(
         ref self: ContractState,
         admin: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         min_stake: u256
     ) {
         self.admin.write(admin);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.min_stake.write(min_stake);
         self.next_worker_id.write(1);
         self.next_unstake_id.write(1);
         self.next_slash_id.write(1);
-        self.base_reward_rate.write(1000000000000000000); // 1 CIRO base rate
+        self.base_reward_rate.write(1000000000000000000); // 1 SAGE base rate
         self.performance_multiplier.write(50); // 50% bonus
         self.ciro_price_usd_cents.write(100); // $1.00 initial price
         
@@ -302,10 +302,10 @@ mod CDCPool {
             assert!(amount >= self.min_stake.read(), "Amount below minimum stake");
             
             let caller = get_caller_address();
-            let ciro_token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             
             // Transfer tokens from caller
-            ciro_token.transfer_from(caller, starknet::get_contract_address(), amount);
+            sage_token.transfer_from(caller, starknet::get_contract_address(), amount);
             
             // Update stake info
             let mut stake_info = self.stakes.read(caller);
@@ -364,8 +364,8 @@ mod CDCPool {
             let stake_info = self.stakes.read(caller);
             
             if stake_info.locked_until <= get_block_timestamp() {
-                let ciro_token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
-                ciro_token.transfer(caller, stake_info.amount);
+                let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+                sage_token.transfer(caller, stake_info.amount);
                 
                 let empty_stake = StakeInfo {
                     amount: 0,
@@ -684,8 +684,8 @@ mod CDCPool {
             if pending > 0 {
                 self.pending_rewards.write(worker_key, 0);
                 
-                let ciro_token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
-                ciro_token.transfer(caller, pending);
+                let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+                sage_token.transfer(caller, pending);
             }
             
             pending
@@ -867,7 +867,7 @@ mod CDCPool {
             let usd_requirement = self.tier_usd_requirements.read(tier_u8);
             let ciro_price = self.ciro_price_usd_cents.read();
             
-            // Calculate CIRO tokens needed (in wei)
+            // Calculate SAGE tokens needed (in wei)
             (usd_requirement * 1000000000000000000) / ciro_price
         }
 
@@ -905,15 +905,15 @@ mod CDCPool {
         }
 
         fn get_holder_tier(self: @ContractState, holder: ContractAddress) -> HolderTier {
-            let ciro_token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
-            let balance = ciro_token.balance_of(holder);
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            let balance = sage_token.balance_of(holder);
             let usd_value = (balance * self.ciro_price_usd_cents.read()) / 1000000000000000000;
             
-            if balance >= 100000000000000000000000000 && usd_value >= 5000000 { // 100M CIRO + $50M
+            if balance >= 100000000000000000000000000 && usd_value >= 5000000 { // 100M SAGE + $50M
                 HolderTier::HyperWhale
-            } else if balance >= 25000000000000000000000000 && usd_value >= 1000000 { // 25M CIRO + $10M
+            } else if balance >= 25000000000000000000000000 && usd_value >= 1000000 { // 25M SAGE + $10M
                 HolderTier::Institution
-            } else if balance >= 5000000000000000000000000 && usd_value >= 200000 { // 5M CIRO + $2M
+            } else if balance >= 5000000000000000000000000 && usd_value >= 200000 { // 5M SAGE + $2M
                 HolderTier::Whale
             } else {
                 HolderTier::Regular

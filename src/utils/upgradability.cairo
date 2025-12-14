@@ -1,4 +1,4 @@
-// CIRO Network Upgradability Module
+// SAGE Network Upgradability Module
 // Secure upgrade patterns with proper access controls and governance integration
 
 use starknet::{ContractAddress, ClassHash};

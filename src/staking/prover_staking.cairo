@@ -1,7 +1,7 @@
 //! Prover Staking Contract
 //!
 //! This contract manages staking for GPU proof workers in the BitSage Network.
-//! Workers must stake CIRO tokens to participate in proof generation.
+//! Workers must stake SAGE tokens to participate in proof generation.
 //!
 //! # Slashing Conditions
 //!
@@ -77,7 +77,7 @@ pub struct WorkerStake {
 /// Staking configuration
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct StakingConfig {
-    /// Minimum stake for Consumer tier (in CIRO wei)
+    /// Minimum stake for Consumer tier (in SAGE wei)
     pub min_stake_consumer: u256,
     /// Minimum stake for Workstation tier
     pub min_stake_workstation: u256,
@@ -166,8 +166,8 @@ mod ProverStaking {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Treasury address (receives slashed funds)
         treasury: ContractAddress,
         /// Verifier contract (can call slash)
@@ -257,20 +257,20 @@ mod ProverStaking {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         treasury: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.treasury.write(treasury);
         
         // Default configuration
         self.config.write(StakingConfig {
-            min_stake_consumer: 1000_000000000000000000,      // 1,000 CIRO
-            min_stake_workstation: 2500_000000000000000000,   // 2,500 CIRO
-            min_stake_datacenter: 5000_000000000000000000,    // 5,000 CIRO
-            min_stake_enterprise: 10000_000000000000000000,   // 10,000 CIRO
-            min_stake_frontier: 25000_000000000000000000,     // 25,000 CIRO
+            min_stake_consumer: 1000_000000000000000000,      // 1,000 SAGE
+            min_stake_workstation: 2500_000000000000000000,   // 2,500 SAGE
+            min_stake_datacenter: 5000_000000000000000000,    // 5,000 SAGE
+            min_stake_enterprise: 10000_000000000000000000,   // 10,000 SAGE
+            min_stake_frontier: 25000_000000000000000000,     // 25,000 SAGE
             slash_invalid_proof_bps: 1000,    // 10%
             slash_timeout_bps: 500,            // 5%
             slash_repeated_failures_bps: 2500, // 25%
@@ -301,7 +301,7 @@ mod ProverStaking {
             assert!(new_total >= min_stake, "Insufficient stake for tier");
             
             // Transfer tokens
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(caller, starknet::get_contract_address(), amount);
             
             // Calculate pending rewards before updating
@@ -384,7 +384,7 @@ mod ProverStaking {
             self.total_staked.write(total);
             
             // Transfer tokens back
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, amount);
             
             self.emit(UnstakeCompleted {
@@ -410,7 +410,7 @@ mod ProverStaking {
             self.stakes.write(caller, stake);
             
             // Transfer rewards from treasury
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(self.treasury.read(), caller, total_rewards);
             
             self.emit(RewardsClaimed {
@@ -470,7 +470,7 @@ mod ProverStaking {
             self.total_slashed.write(total_slashed);
             
             // Transfer slashed amount to treasury
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(self.treasury.read(), slash_amount);
             
             self.emit(Slashed {

@@ -100,7 +100,7 @@ BitSage Network is building the **decentralized infrastructure for verifiable GP
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                          ECONOMIC LAYER                                    │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
-│  │  Collateral  │  │   Vesting    │  │  Governance  │  │    CIRO      │   │
+│  │  Collateral  │  │   Vesting    │  │  Governance  │  │    SAGE      │   │
 │  │  (20%/80%)   │  │  (180 epoch) │  │  Treasury    │  │    Token     │   │
 │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘   │
 └────────────────────────────────────────────────────────────────────────────┘
@@ -112,7 +112,7 @@ BitSage Network is building the **decentralized infrastructure for verifiable GP
 src/
 │
 ├── 🪙 CORE TOKEN
-│   └── ciro_token.cairo              # ERC20 with governance features
+│   └── sage_token.cairo              # ERC20 with governance features
 │
 ├── 💼 JOB ORCHESTRATION
 │   ├── job_manager.cairo             # Job submission & assignment
@@ -167,7 +167,7 @@ src/
 │       └── gamification.cairo        # Engagement incentives
 │
 ├── 🚰 DISTRIBUTION
-│   ├── faucet.cairo                  # Testnet token faucet (0.02 CIRO/claim)
+│   ├── faucet.cairo                  # Testnet token faucet (0.02 SAGE/claim)
 │   └── simple_events.cairo           # Event testing utility
 │
 └── 🔧 UTILITIES
@@ -179,7 +179,7 @@ src/
 
 <h2 id="economics">💎 Token Economics</h2>
 
-### The CIRO Token
+### The SAGE Token
 
 <table>
 <tr>
@@ -189,8 +189,8 @@ src/
 
 | Parameter | Value |
 |-----------|-------|
-| **Total Supply** | 1,000,000,000 CIRO |
-| **Initial Circulating** | 50,000,000 CIRO |
+| **Total Supply** | 1,000,000,000 SAGE |
+| **Initial Circulating** | 50,000,000 SAGE |
 | **Decimals** | 18 |
 | **Token Standard** | ERC20 + Governance |
 
@@ -201,11 +201,11 @@ src/
 
 | Tier | Min Stake |
 |------|-----------|
-| 🎮 Consumer (RTX 4090) | 1,000 CIRO |
-| 🖥️ Workstation (A6000) | 2,500 CIRO |
-| 🏢 DataCenter (A100) | 5,000 CIRO |
-| 🚀 Enterprise (H100) | 10,000 CIRO |
-| ⚡ Frontier (B200) | 25,000 CIRO |
+| 🎮 Consumer (RTX 4090) | 1,000 SAGE |
+| 🖥️ Workstation (A6000) | 2,500 SAGE |
+| 🏢 DataCenter (A100) | 5,000 SAGE |
+| 🚀 Enterprise (H100) | 10,000 SAGE |
+| ⚡ Frontier (B200) | 25,000 SAGE |
 
 </td>
 </tr>
@@ -308,7 +308,7 @@ Grace Period: 90 epochs (FREE)
 ### Core Contracts
 
 <details>
-<summary><strong>🪙 CIRO Token</strong> - Governance-enabled ERC20</summary>
+<summary><strong>🪙 SAGE Token</strong> - Governance-enabled ERC20</summary>
 
 ```cairo
 // Key Features:
@@ -387,7 +387,7 @@ Pending → Active → Jailed → Unjailed → Active
                 Tombstoned (permanent)
 
 // Requirements:
-- Min stake: 10,000 CIRO
+- Min stake: 10,000 SAGE
 - TEE attestation
 - Proof-of-Compute participation
 ```
@@ -465,7 +465,7 @@ export STARKNET_KEYSTORE="path/to/keystore.json"
 ### Contract Addresses (Sepolia)
 
 ```
-CIRO Token:        0x0662c81...279a
+SAGE Token:        0x0662c81...279a
 Treasury Timelock: 0x04736828...089c7
 CDC Pool:          [pending]
 Job Manager:       [pending]

@@ -1,7 +1,7 @@
-//! CIRO Network Vesting System
+//! SAGE Network Vesting System
 //! Complete production-ready vesting and tokenomics management
 //! 
-//! This module implements the sophisticated vesting system designed for CIRO Network's
+//! This module implements the sophisticated vesting system designed for SAGE Network's
 //! market-tested tokenomics with the following components:
 //!
 //! ## Core Vesting Contracts
@@ -34,7 +34,7 @@
 //! - Production-ready contracts with comprehensive testing
 //! - Upgrade-safe implementations
 //! - Emergency controls and pause mechanisms
-//! - Complete integration with CIRO token ecosystem
+//! - Complete integration with SAGE token ecosystem
 
 // Re-export all vesting contracts for external access
 pub mod linear_vesting_with_cliff;
@@ -82,7 +82,7 @@ pub use treasury_timelock::{
 //! - Compliance officer addresses for KYC/AML workflows
 //!
 //! ### Cross-Contract Dependencies
-//! - BurnManager requires BURN_AUTHORITY_ROLE on CIRO token
+//! - BurnManager requires BURN_AUTHORITY_ROLE on SAGE token
 //! - Vesting contracts require token allowances for releases
 //! - TreasuryTimelock manages treasury contract permissions
 //! - All contracts integrate with AccessControl hierarchy

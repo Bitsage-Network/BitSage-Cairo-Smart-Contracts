@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Copyright (c) 2025 CIRO Network Foundation
+// Copyright (c) 2025 SAGE Network Foundation
 //
-// This file is part of CIRO Network.
+// This file is part of SAGE Network.
 //
 // Licensed under the Business Source License 1.1 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,12 +11,12 @@
 // Change Date: January 1, 2029
 // Change License: Apache License, Version 2.0
 //
-// For more information see: https://github.com/Ciro-AI-Labs/ciro-network/blob/main/WHY_BSL_FOR_CIRO.md
+// For more information see: https://github.com/Ciro-AI-Labs/ciro-network/blob/main/WHY_BSL_FOR_SAGE.md
 
-//! CIRO Network JobManager Contract
+//! SAGE Network JobManager Contract
 //! 
 //! Main contract for managing job submissions, assignments, execution, and payments
-//! in the CIRO Distributed Compute Layer. This contract coordinates with CDC Pool
+//! in the SAGE Distributed Compute Layer. This contract coordinates with CDC Pool
 //! and Payment systems to provide the core job orchestration functionality.
 
 // Core Starknet imports
@@ -30,7 +30,7 @@ use starknet::storage::{
 };
 
 // Interface imports
-use ciro_contracts::interfaces::job_manager::{
+use sage_contracts::interfaces::job_manager::{
     IJobManager, JobId, ModelId, WorkerId, JobType, JobSpec, JobResult, 
     VerificationMethod, ModelRequirements, JobState, JobDetails, WorkerStats,
     ProveJobData
@@ -195,9 +195,9 @@ mod JobManager {
         
         // Set default configuration
         self.platform_fee_bps.write(250); // 2.5%
-        self.min_job_payment.write(1000000000000000000); // 1 CIRO token
+        self.min_job_payment.write(1000000000000000000); // 1 SAGE token
         self.max_job_duration.write(86400); // 24 hours
-        self.dispute_fee.write(10000000000000000000); // 10 CIRO tokens
+        self.dispute_fee.write(10000000000000000000); // 10 SAGE tokens
         self.min_allocation_score.write(100);
         
         self.next_job_id.write(1);

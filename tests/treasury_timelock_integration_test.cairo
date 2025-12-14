@@ -4,10 +4,10 @@
 use starknet::{ContractAddress, contract_address_const, get_block_timestamp};
 use snforge_std::{declare, ContractClassTrait, DeclareResultTrait, start_cheat_caller_address, stop_cheat_caller_address, start_cheat_block_timestamp, stop_cheat_block_timestamp};
 
-use ciro_contracts::vesting::treasury_timelock::{
+use sage_contracts::vesting::treasury_timelock::{
     ITreasuryTimelockDispatcher, ITreasuryTimelockDispatcherTrait
 };
-use ciro_contracts::governance::governance_treasury::{
+use sage_contracts::governance::governance_treasury::{
     IGovernanceTreasuryDispatcher, IGovernanceTreasuryDispatcherTrait
 };
 

@@ -166,8 +166,8 @@ mod FeeManager {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Treasury address
         treasury: ContractAddress,
         /// Staking contract address
@@ -256,12 +256,12 @@ mod FeeManager {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         treasury: ContractAddress,
         job_manager: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.treasury.write(treasury);
         self.job_manager.write(job_manager);
         
@@ -350,7 +350,7 @@ mod FeeManager {
             );
             
             let breakdown = self._calculate_fees_internal(gmv);
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             
             // 1. Burn tokens (transfer to dead address or use burn function if available)
             token.transfer(self.burn_address.read(), breakdown.burn_amount);
@@ -423,7 +423,7 @@ mod FeeManager {
             self.staker_rewards.write(caller, reward);
             
             // Transfer rewards
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, total_claim);
             
             self.emit(StakerRewardsClaimed {

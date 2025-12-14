@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CIRO Network - Core System Deployment Script
+# SAGE Network - Core System Deployment Script
 # Deploys the essential contracts needed for basic network operation
 # Based on successful Reputation Manager deployment pattern
 
@@ -21,13 +21,13 @@ DEPLOYMENT_FILE="$PROJECT_ROOT/core_deployment_$(date +%Y%m%d_%H%M%S).json"
 # Default values - can be overridden by environment variables
 NETWORK=${NETWORK:-"sepolia"}
 ACCOUNT_CONFIG=${ACCOUNT_CONFIG:-"temp_account.json"}
-KEYSTORE_PATH=${KEYSTORE_PATH:-"../CIRO_Network_Backup/20250711_061352/testnet_keystore.json"}
+KEYSTORE_PATH=${KEYSTORE_PATH:-"../SAGE_Network_Backup/20250711_061352/testnet_keystore.json"}
 KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-"test"}
 DRY_RUN=${DRY_RUN:-false}
 
 print_header() {
     echo -e "${BLUE}=========================================${NC}"
-    echo -e "${BLUE}  CIRO Network - Core Deployment${NC}"
+    echo -e "${BLUE}  SAGE Network - Core Deployment${NC}"
     echo -e "${BLUE}  $(date)${NC}"
     echo -e "${BLUE}=========================================${NC}"
     echo ""
@@ -139,40 +139,40 @@ main() {
     
     local target_dir="$PROJECT_ROOT/target/dev"
     
-    print_step "Deploying Core CIRO Network Contracts"
+    print_step "Deploying Core SAGE Network Contracts"
     
     # Get deployer address
     DEPLOYER_ADDRESS="0x02f5248a6b08cd6a52cb9db812e98c675be165cf803a56ac06aefbce74d1f2ca"
     
-    # 1. Deploy CIRO Token
-    print_info "Step 1/4: CIRO Token"
-    CIRO_TOKEN_CLASS=$(declare_contract "CIRO Token" "$target_dir/ciro_contracts_CIROToken.contract_class.json")
-    CIRO_TOKEN_ADDRESS=$(deploy_contract "CIRO Token" "$CIRO_TOKEN_CLASS" "$DEPLOYER_ADDRESS")
+    # 1. Deploy SAGE Token
+    print_info "Step 1/4: SAGE Token"
+    SAGE_TOKEN_CLASS=$(declare_contract "SAGE Token" "$target_dir/sage_contracts_SAGEToken.contract_class.json")
+    SAGE_TOKEN_ADDRESS=$(deploy_contract "SAGE Token" "$SAGE_TOKEN_CLASS" "$DEPLOYER_ADDRESS")
     echo ""
     
     # 2. Deploy Governance Treasury
     print_info "Step 2/4: Governance Treasury" 
-    GOVERNANCE_TREASURY_CLASS=$(declare_contract "Governance Treasury" "$target_dir/ciro_contracts_GovernanceTreasury.contract_class.json")
-    GOVERNANCE_TREASURY_ADDRESS=$(deploy_contract "Governance Treasury" "$GOVERNANCE_TREASURY_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS")
+    GOVERNANCE_TREASURY_CLASS=$(declare_contract "Governance Treasury" "$target_dir/sage_contracts_GovernanceTreasury.contract_class.json")
+    GOVERNANCE_TREASURY_ADDRESS=$(deploy_contract "Governance Treasury" "$GOVERNANCE_TREASURY_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS")
     echo ""
     
     # 3. Deploy Job Manager
     print_info "Step 3/4: Job Manager"
-    JOB_MANAGER_CLASS=$(declare_contract "Job Manager" "$target_dir/ciro_contracts_JobManager.contract_class.json")
-    JOB_MANAGER_ADDRESS=$(deploy_contract "Job Manager" "$JOB_MANAGER_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS" "0x0")
+    JOB_MANAGER_CLASS=$(declare_contract "Job Manager" "$target_dir/sage_contracts_JobManager.contract_class.json")
+    JOB_MANAGER_ADDRESS=$(deploy_contract "Job Manager" "$JOB_MANAGER_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$GOVERNANCE_TREASURY_ADDRESS" "0x0")
     echo ""
     
     # 4. Deploy CDC Pool
     print_info "Step 4/4: CDC Pool"
-    CDC_POOL_CLASS=$(declare_contract "CDC Pool" "$target_dir/ciro_contracts_CDCPool.contract_class.json")
-    CDC_POOL_ADDRESS=$(deploy_contract "CDC Pool" "$CDC_POOL_CLASS" "$DEPLOYER_ADDRESS" "$CIRO_TOKEN_ADDRESS" "$JOB_MANAGER_ADDRESS")
+    CDC_POOL_CLASS=$(declare_contract "CDC Pool" "$target_dir/sage_contracts_CDCPool.contract_class.json")
+    CDC_POOL_ADDRESS=$(deploy_contract "CDC Pool" "$CDC_POOL_CLASS" "$DEPLOYER_ADDRESS" "$SAGE_TOKEN_ADDRESS" "$JOB_MANAGER_ADDRESS")
     echo ""
     
     print_step "Deployment Summary"
     echo -e "${GREEN}🎉 Core contracts deployed successfully!${NC}"
     echo ""
     echo -e "${YELLOW}Contract Addresses:${NC}"
-    echo -e "   CIRO Token:         ${BLUE}$CIRO_TOKEN_ADDRESS${NC}"
+    echo -e "   SAGE Token:         ${BLUE}$SAGE_TOKEN_ADDRESS${NC}"
     echo -e "   Governance Treasury:${BLUE}$GOVERNANCE_TREASURY_ADDRESS${NC}"
     echo -e "   Job Manager:        ${BLUE}$JOB_MANAGER_ADDRESS${NC}"
     echo -e "   CDC Pool:           ${BLUE}$CDC_POOL_ADDRESS${NC}"
@@ -185,9 +185,9 @@ main() {
   "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "deployer": "$DEPLOYER_ADDRESS",
   "core_contracts": {
-    "ciro_token": {
-      "address": "$CIRO_TOKEN_ADDRESS",
-      "class_hash": "$CIRO_TOKEN_CLASS"
+    "sage_token": {
+      "address": "$SAGE_TOKEN_ADDRESS",
+      "class_hash": "$SAGE_TOKEN_CLASS"
     },
     "governance_treasury": {
       "address": "$GOVERNANCE_TREASURY_ADDRESS", 

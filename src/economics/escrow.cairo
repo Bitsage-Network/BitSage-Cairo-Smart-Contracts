@@ -131,8 +131,8 @@ mod Escrow {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Fee manager contract
         fee_manager: ContractAddress,
         /// Job manager contract
@@ -205,10 +205,10 @@ mod Escrow {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         
         self.stats.write(EscrowStats {
             total_locked: 0,
@@ -238,7 +238,7 @@ mod Escrow {
             assert(existing.amount == 0, 'Escrow already exists');
             
             // Transfer max cost to contract
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(caller, starknet::get_contract_address(), max_cost);
             
             // Create escrow
@@ -291,7 +291,7 @@ mod Escrow {
             self.stats.write(stats);
             
             // Transfer back to client
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(caller, refund_amount);
             
             self.emit(EscrowRefunded {
@@ -354,7 +354,7 @@ mod Escrow {
             stats.completed_count = stats.completed_count + 1;
             self.stats.write(stats);
             
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             
             // Transfer actual cost to fee manager for processing
             let fee_manager_addr = self.fee_manager.read();
@@ -403,7 +403,7 @@ mod Escrow {
             self.stats.write(stats);
             
             // Refund to client
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(escrow.client, refund_amount);
             
             self.emit(EscrowRefunded {
@@ -429,7 +429,7 @@ mod Escrow {
             let mut escrow = self.escrows.read(job_id);
             assert(escrow.status == STATUS_DISPUTED, 'Not disputed');
             
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let mut stats = self.stats.read();
             
             if refund_client {

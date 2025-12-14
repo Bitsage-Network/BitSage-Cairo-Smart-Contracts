@@ -10,7 +10,7 @@ mod Gamification {
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
-    use ciro_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
+    use sage_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
 
     // Worker levels
     #[derive(Drop, Serde, Copy, PartialEq)]
@@ -72,7 +72,7 @@ mod Gamification {
         // Admin
         owner: ContractAddress,
         job_manager: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         staking_contract: ContractAddress, // Added for worker address lookup
         nft_contract: ContractAddress,
         
@@ -167,10 +167,10 @@ mod Gamification {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         
         // Set level thresholds
         self.level_thresholds.write(0, 0);      // Apprentice
@@ -179,14 +179,14 @@ mod Gamification {
         self.level_thresholds.write(3, 15000);  // Master
         self.level_thresholds.write(4, 50000);  // Legend
         
-        // Set achievement rewards (in CIRO, 18 decimals)
-        self.achievement_rewards.write(0, 100000000000000000000);    // FirstJob: 100 CIRO
-        self.achievement_rewards.write(1, 500000000000000000000);    // Dedicated: 500 CIRO
-        self.achievement_rewards.write(2, 1000000000000000000000);   // SpeedDemon: 1000 CIRO
-        self.achievement_rewards.write(3, 2000000000000000000000);   // ConfidentialExpert: 2000 CIRO
-        self.achievement_rewards.write(4, 5000000000000000000000);   // NetworkGuardian: 5000 CIRO
-        self.achievement_rewards.write(5, 3000000000000000000000);   // Century: 3000 CIRO
-        self.achievement_rewards.write(6, 10000000000000000000000);  // LegendStatus: 10000 CIRO
+        // Set achievement rewards (in SAGE, 18 decimals)
+        self.achievement_rewards.write(0, 100000000000000000000);    // FirstJob: 100 SAGE
+        self.achievement_rewards.write(1, 500000000000000000000);    // Dedicated: 500 SAGE
+        self.achievement_rewards.write(2, 1000000000000000000000);   // SpeedDemon: 1000 SAGE
+        self.achievement_rewards.write(3, 2000000000000000000000);   // ConfidentialExpert: 2000 SAGE
+        self.achievement_rewards.write(4, 5000000000000000000000);   // NetworkGuardian: 5000 SAGE
+        self.achievement_rewards.write(5, 3000000000000000000000);   // Century: 3000 SAGE
+        self.achievement_rewards.write(6, 10000000000000000000000);  // LegendStatus: 10000 SAGE
         
         // Set reputation parameters
         self.base_reputation.write(100);
@@ -263,7 +263,7 @@ mod Gamification {
                 // Level up reward
                 let reward = self._get_level_reward(new_level);
                 if reward > 0 {
-                    let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+                    let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
                     token.transfer(starknet::get_contract_address(), reward); // TODO: Get worker address
                 }
                 
@@ -479,15 +479,15 @@ mod Gamification {
 
         /// Get level up reward
         fn _get_level_reward(self: @ContractState, level: u8) -> u256 {
-            // Rewards per level (in CIRO)
+            // Rewards per level (in SAGE)
             if level == 1 {
-                500000000000000000000 // 500 CIRO
+                500000000000000000000 // 500 SAGE
             } else if level == 2 {
-                2000000000000000000000 // 2000 CIRO
+                2000000000000000000000 // 2000 SAGE
             } else if level == 3 {
-                5000000000000000000000 // 5000 CIRO
+                5000000000000000000000 // 5000 SAGE
             } else if level == 4 {
-                15000000000000000000000 // 15000 CIRO
+                15000000000000000000000 // 15000 SAGE
             } else {
                 0
             }
@@ -521,7 +521,7 @@ mod Gamification {
                 let worker_address = staking.get_worker_address(worker_id);
                 
                 if !worker_address.is_zero() {
-                    let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+                    let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
                     token.transfer(worker_address, reward);
                 }
             }

@@ -1,4 +1,4 @@
-// CIRO Network Governance Module
+// SAGE Network Governance Module
 // Basic proposal and voting mechanisms for decentralized governance
 
 use starknet::ContractAddress;

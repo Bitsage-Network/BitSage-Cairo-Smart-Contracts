@@ -1,4 +1,4 @@
-// CIRO Network Milestone Vesting
+// SAGE Network Milestone Vesting
 // Token distribution based on achievement of specific milestones
 
 use starknet::ContractAddress;

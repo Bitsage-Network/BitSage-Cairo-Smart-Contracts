@@ -1,4 +1,4 @@
-//! Common Utilities for CIRO Network Contracts
+//! Common Utilities for SAGE Network Contracts
 //! Cairo 2.12.0 Code Deduplication Optimizations
 //! 
 //! This module contains shared functions used across multiple contracts

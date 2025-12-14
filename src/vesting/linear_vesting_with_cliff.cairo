@@ -1,4 +1,4 @@
-// CIRO Network Linear Vesting with Cliff
+// SAGE Network Linear Vesting with Cliff
 // Token distribution schedules with cliff periods and linear release
 
 use starknet::ContractAddress;

@@ -10,7 +10,7 @@ mkdir -p "$KEYSTORE_DIR" "$GENERATED_DIR"
 
 TOKEN=$(jq -r '.token' "$RECIPIENTS_JSON")
 DECIMALS=$(jq -r '.amount_decimals' "$RECIPIENTS_JSON")
-PER_CIRO=$(jq -r '.per_recipient_ciro' "$RECIPIENTS_JSON")
+PER_SAGE=$(jq -r '.per_recipient_sage' "$RECIPIENTS_JSON")
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required. Please install jq and re-run." >&2
@@ -62,7 +62,7 @@ fi
 
 # 2) Compute amount in wei (u256 low/high)
 # 10000 * 10^18 = 10000e18
-AMOUNT_DEC=$PER_CIRO
+AMOUNT_DEC=$PER_SAGE
 pow18=1000000000000000000
 AMOUNT_WEI=$(python3 - <<PY
 print(int("$AMOUNT_DEC")*int($pow18))
@@ -78,8 +78,8 @@ PY
 )
 
 # 3) Execute transfers (prompt for main holder keystore when invoking)
-MAIN_ACC_JSON="/Users/ciro/ciro-network/cairo-contracts/testnet_account.json"
-MAIN_KS="/Users/ciro/ciro-network/cairo-contracts/testnet_keystore.json"
+MAIN_ACC_JSON="/Users/sage/sage-network/cairo-contracts/testnet_account.json"
+MAIN_KS="/Users/sage/sage-network/cairo-contracts/testnet_keystore.json"
 HOLDER_ADDR="0xc651f117d194bdf988c10769ad2260859fc6ecd6d1c49bcdb5e5bd9d806220"
 
 echo "Reviewing recipients and performing transfers..."

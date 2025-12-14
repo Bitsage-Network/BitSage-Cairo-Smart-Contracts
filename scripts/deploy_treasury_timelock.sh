@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CIRO Network - Treasury Timelock Manual Deployment Script
+# SAGE Network - Treasury Timelock Manual Deployment Script
 # This script handles the complex Array constructor parameters for Treasury Timelock
 
 set -e
@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NETWORK="sepolia"
 ACCOUNT_CONFIG="temp_account.json"
-KEYSTORE_PATH="../CIRO_Network_Backup/20250711_061352/testnet_keystore.json"
+KEYSTORE_PATH="../SAGE_Network_Backup/20250711_061352/testnet_keystore.json"
 
 # PRODUCTION SECURITY CONFIGURATION
 # Based on comprehensive security analysis and best practices
@@ -42,7 +42,7 @@ DEFAULT_EMERGENCY_MEMBERS=(
 
 print_header() {
     echo -e "${BLUE}======================================================${NC}"
-    echo -e "${BLUE}  CIRO Network - Treasury Timelock Deployment${NC}"
+    echo -e "${BLUE}  SAGE Network - Treasury Timelock Deployment${NC}"
     echo -e "${BLUE}  $(date)${NC}"
     echo -e "${BLUE}======================================================${NC}"
     echo ""
@@ -235,7 +235,7 @@ deploy_treasury_timelock() {
     cd "$PROJECT_ROOT"
     
     # Check if contract class exists
-    local contract_file="target/dev/ciro_contracts_TreasuryTimelock.contract_class.json"
+    local contract_file="target/dev/sage_contracts_TreasuryTimelock.contract_class.json"
     if [ ! -f "$contract_file" ]; then
         print_error "Contract class file not found: $contract_file"
         print_info "Run 'scarb build' first to generate contract artifacts"

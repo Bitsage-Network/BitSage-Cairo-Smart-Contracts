@@ -1,4 +1,4 @@
-//! CIRO Network CDC Pool Deployment Script
+//! SAGE Network CDC Pool Deployment Script
 //! 
 //! Production deployment script for CDC Pool contract with complete
 //! configuration, role assignment, and integration setup.
@@ -7,17 +7,17 @@ use snforge_std::{declare, ContractClassTrait, DeclareResultTrait, start_cheat_c
 use starknet::{ContractAddress, contract_address_const, get_contract_address};
 
 use crate::interfaces::cdc_pool::{ICDCPoolDispatcher, ICDCPoolDispatcherTrait};
-use crate::interfaces::ciro_token::{ICIROTokenDispatcher, ICIROTokenDispatcherTrait};
+use crate::interfaces::sage_token::{ISAGETokenDispatcher, ISAGETokenDispatcherTrait};
 use crate::interfaces::job_manager::{IJobManagerDispatcher, IJobManagerDispatcherTrait};
 
 /// Production deployment configuration
 #[derive(Drop, Clone)]
 struct DeploymentConfig {
     admin_address: ContractAddress,
-    ciro_token_address: ContractAddress,
+    sage_token_address: ContractAddress,
     job_manager_address: ContractAddress,
     price_oracle_address: ContractAddress,
-    initial_ciro_price: u256,
+    initial_sage_price: u256,
     unstaking_delay: u64,
     minimum_stake_basic: u256,
     coordinator_address: ContractAddress,
@@ -28,12 +28,12 @@ struct DeploymentConfig {
 fn get_testnet_config() -> DeploymentConfig {
     DeploymentConfig {
         admin_address: contract_address_const::<'admin'>(),
-        ciro_token_address: contract_address_const::<'ciro_token'>(),
+        sage_token_address: contract_address_const::<'sage_token'>(),
         job_manager_address: contract_address_const::<'job_manager'>(),
         price_oracle_address: contract_address_const::<'price_oracle'>(),
-        initial_ciro_price: 1000000, // $1.00 in 6 decimals
+        initial_sage_price: 1000000, // $1.00 in 6 decimals
         unstaking_delay: 3600, // 1 hour for testing
-        minimum_stake_basic: 100000000, // 100 CIRO tokens
+        minimum_stake_basic: 100000000, // 100 SAGE tokens
         coordinator_address: contract_address_const::<'coordinator'>(),
         slasher_address: contract_address_const::<'slasher'>(),
     }
@@ -43,12 +43,12 @@ fn get_testnet_config() -> DeploymentConfig {
 fn get_mainnet_config() -> DeploymentConfig {
     DeploymentConfig {
         admin_address: contract_address_const::<'mainnet_admin'>(),
-        ciro_token_address: contract_address_const::<'mainnet_ciro_token'>(),
+        sage_token_address: contract_address_const::<'mainnet_sage_token'>(),
         job_manager_address: contract_address_const::<'mainnet_job_manager'>(),
         price_oracle_address: contract_address_const::<'mainnet_price_oracle'>(),
-        initial_ciro_price: 1000000, // $1.00 in 6 decimals
+        initial_sage_price: 1000000, // $1.00 in 6 decimals
         unstaking_delay: 604800, // 7 days for production
-        minimum_stake_basic: 100000000, // 100 CIRO tokens
+        minimum_stake_basic: 100000000, // 100 SAGE tokens
         coordinator_address: contract_address_const::<'mainnet_coordinator'>(),
         slasher_address: contract_address_const::<'mainnet_slasher'>(),
     }
@@ -62,7 +62,7 @@ fn deploy_cdc_pool(config: DeploymentConfig) -> ICDCPoolDispatcher {
     // Prepare constructor arguments
     let constructor_args = array![
         config.admin_address.into(),
-        config.ciro_token_address.into(),
+        config.sage_token_address.into(),
         config.job_manager_address.into(),
         config.price_oracle_address.into()
     ];
@@ -89,7 +89,7 @@ fn configure_cdc_pool(cdc_pool: ICDCPoolDispatcher, config: DeploymentConfig) {
     
     // 2. Set initial parameters
     println!("⚙️  Setting initial parameters...");
-    cdc_pool.update_ciro_price(config.initial_ciro_price);
+    cdc_pool.update_sage_price(config.initial_sage_price);
     cdc_pool.configure_unstaking_delay(config.unstaking_delay);
     
     // 3. Configure tier minimum stakes
@@ -128,8 +128,8 @@ fn validate_deployment(cdc_pool: ICDCPoolDispatcher, config: DeploymentConfig) -
     assert(has_slasher_role, 'Slasher role not assigned');
     
     // Check initial price setting
-    let current_price = cdc_pool.get_current_ciro_price();
-    assert(current_price == config.initial_ciro_price, 'Price not set correctly');
+    let current_price = cdc_pool.get_current_sage_price();
+    assert(current_price == config.initial_sage_price, 'Price not set correctly');
     
     // Check unstaking delay
     let unstaking_info = cdc_pool.get_unstaking_delay();
@@ -143,16 +143,16 @@ fn validate_deployment(cdc_pool: ICDCPoolDispatcher, config: DeploymentConfig) -
     true
 }
 
-/// Setup integration with CIRO Token and JobMgr
+/// Setup integration with SAGE Token and JobMgr
 fn setup_integrations(cdc_pool: ICDCPoolDispatcher, config: DeploymentConfig) {
     println!("🔗 Setting up integrations...");
     
-    // Setup CIRO Token integration
-    let ciro_token = ICIROTokenDispatcher { contract_address: config.ciro_token_address };
-    start_cheat_caller_address(ciro_token.contract_address, config.admin_address);
+    // Setup SAGE Token integration
+    let sage_token = ISAGETokenDispatcher { contract_address: config.sage_token_address };
+    start_cheat_caller_address(sage_token.contract_address, config.admin_address);
     
     // Grant CDC Pool permission to mint/burn if needed (for advanced features)
-    // ciro_token.grant_role(ciro_token.MINTER_ROLE(), cdc_pool.contract_address);
+    // sage_token.grant_role(sage_token.MINTER_ROLE(), cdc_pool.contract_address);
     
     // Setup JobMgr integration
     let job_manager = IJobManagerDispatcher { contract_address: config.job_manager_address };
@@ -279,9 +279,9 @@ fn print_deployment_summary(cdc_pool: ICDCPoolDispatcher, config: DeploymentConf
     println!("=====================");
     println!("📍 CDC Pool Address: {}", cdc_pool.contract_address);
     println!("👤 Admin Address: {}", config.admin_address);
-    println!("🪙 CIRO Token: {}", config.ciro_token_address);
+    println!("🪙 SAGE Token: {}", config.sage_token_address);
     println!("⚙️  JobMgr Integration: {}", config.job_manager_address);
-    println!("💰 Initial CIRO Price: ${}", config.initial_ciro_price as u64 / 1000000);
+    println!("💰 Initial SAGE Price: ${}", config.initial_sage_price as u64 / 1000000);
     println!("⏱️  Unstaking Delay: {} seconds", config.unstaking_delay);
     
     println!("\n🎯 NEXT STEPS");

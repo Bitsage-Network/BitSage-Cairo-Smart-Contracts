@@ -2,7 +2,7 @@
 // TESTNET FAUCET CONTRACT - BitSage Network
 // =============================================================================
 //
-// Allows users to claim testnet CIRO tokens for development and testing.
+// Allows users to claim testnet SAGE tokens for development and testing.
 //
 // Features:
 // - Rate limiting (1 claim per address per cooldown period)
@@ -18,9 +18,9 @@ use starknet::ContractAddress;
 // Constants
 // =============================================================================
 
-const DEFAULT_DRIP_AMOUNT: u256 = 20_000000000000000; // 0.02 CIRO (supply conscious)
+const DEFAULT_DRIP_AMOUNT: u256 = 20_000000000000000; // 0.02 SAGE (supply conscious)
 const DEFAULT_COOLDOWN: u64 = 86400; // 24 hours in seconds
-const MAX_DRIP_AMOUNT: u256 = 100_000000000000000000; // 100 CIRO max (admin override)
+const MAX_DRIP_AMOUNT: u256 = 100_000000000000000000; // 100 SAGE max (admin override)
 
 // =============================================================================
 // Data Types
@@ -130,8 +130,8 @@ mod Faucet {
     struct Storage {
         /// Contract owner
         owner: ContractAddress,
-        /// CIRO token address
-        ciro_token: ContractAddress,
+        /// SAGE token address
+        sage_token: ContractAddress,
         /// Configuration
         config: FaucetConfig,
         /// User claim info
@@ -205,10 +205,10 @@ mod Faucet {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         
         // Default configuration
         self.config.write(FaucetConfig {
@@ -237,7 +237,7 @@ mod Faucet {
             assert(config.is_active, 'Faucet is paused');
             
             // Check balance
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let balance = token.balance_of(starknet::get_contract_address());
             assert(balance >= config.drip_amount, 'Faucet empty');
             
@@ -293,7 +293,7 @@ mod Faucet {
             }
             
             // Check balance
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let balance = token.balance_of(starknet::get_contract_address());
             if balance < config.drip_amount {
                 return false;
@@ -340,7 +340,7 @@ mod Faucet {
             let caller = get_caller_address();
             
             // Transfer tokens to faucet
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer_from(caller, starknet::get_contract_address(), amount);
             
             let new_balance = token.balance_of(starknet::get_contract_address());
@@ -387,7 +387,7 @@ mod Faucet {
         fn emergency_withdraw(ref self: ContractState, to: ContractAddress) {
             self._only_owner();
             
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let balance = token.balance_of(starknet::get_contract_address());
             
             token.transfer(to, balance);
@@ -404,7 +404,7 @@ mod Faucet {
         }
 
         fn get_stats(self: @ContractState) -> FaucetStats {
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let balance = token.balance_of(starknet::get_contract_address());
             
             FaucetStats {
@@ -416,7 +416,7 @@ mod Faucet {
         }
 
         fn get_balance(self: @ContractState) -> u256 {
-            let token = IERC20Dispatcher { contract_address: self.ciro_token.read() };
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.balance_of(starknet::get_contract_address())
         }
     }

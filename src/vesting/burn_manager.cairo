@@ -1,4 +1,4 @@
-// CIRO Network Burn Manager
+// SAGE Network Burn Manager
 // Token buyback and burn mechanisms for ecosystem value accrual
 
 use starknet::ContractAddress;

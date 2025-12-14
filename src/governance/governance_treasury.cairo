@@ -1,4 +1,4 @@
-//! Complete Governance Treasury for CIRO Network
+//! Complete Governance Treasury for SAGE Network
 //! Full DAO infrastructure with timelock, multi-sig, and governance capabilities
 
 use starknet::ContractAddress;
@@ -80,13 +80,13 @@ pub mod GovernanceTreasury {
         Map, StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess
     };
-    use ciro_contracts::interfaces::ciro_token::{ICIROTokenDispatcher, ICIROTokenDispatcherTrait};
+    use sage_contracts::interfaces::sage_token::{ISAGETokenDispatcher, ISAGETokenDispatcherTrait};
 
     #[storage]
     struct Storage {
         // Core governance
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         governance_config: GovernanceConfig,
         
         // Proposals
@@ -179,13 +179,13 @@ pub mod GovernanceTreasury {
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        ciro_token: ContractAddress,
+        sage_token: ContractAddress,
         initial_council: Array<ContractAddress>,
         council_threshold: u32,
         governance_config: GovernanceConfig
     ) {
         self.owner.write(owner);
-        self.ciro_token.write(ciro_token);
+        self.sage_token.write(sage_token);
         self.governance_config.write(governance_config);
         self.proposal_count.write(0);
         self.total_funds.write(0);
@@ -417,7 +417,7 @@ pub mod GovernanceTreasury {
             let available_funds = self.total_funds.read() - self.reserved_funds.read();
             assert(amount <= available_funds, 'Insufficient funds');
             
-            let token = ICIROTokenDispatcher { contract_address: self.ciro_token.read() };
+            let token = ISAGETokenDispatcher { contract_address: self.sage_token.read() };
             token.transfer(to, amount);
             
             self.total_funds.write(self.total_funds.read() - amount);
@@ -433,7 +433,7 @@ pub mod GovernanceTreasury {
             let caller = get_caller_address();
             assert(self.emergency_council.read(caller), 'Not emergency council');
             
-            let ciro = ICIROTokenDispatcher { contract_address: token };
+            let ciro = ISAGETokenDispatcher { contract_address: token };
             ciro.transfer(caller, amount);
             
             self.emit(EmergencyAction {
@@ -506,7 +506,7 @@ pub mod GovernanceTreasury {
     #[generate_trait]
     impl InternalImpl of InternalTrait {
         fn _get_voting_power(self: @ContractState, account: ContractAddress) -> u256 {
-            let token = ICIROTokenDispatcher { contract_address: self.ciro_token.read() };
+            let token = ISAGETokenDispatcher { contract_address: self.sage_token.read() };
             token.balance_of(account)
         }
 
@@ -527,7 +527,7 @@ pub mod GovernanceTreasury {
             match proposal.proposal_type {
                 ProposalType::Treasury => {
                     // Handle treasury operations
-                    let token = ICIROTokenDispatcher { contract_address: self.ciro_token.read() };
+                    let token = ISAGETokenDispatcher { contract_address: self.sage_token.read() };
                     token.transfer(proposal.target, proposal.value);
                     
                     self.emit(FundsTransferred {

@@ -6,7 +6,7 @@ echo ""
 
 # Contract addresses
 TREASURY_TIMELOCK="0x04736828c69fda6977bdb97c982db6bf1bbcae0396a2faac450b2ec7338089c7"
-CIRO_TOKEN="0x03c0f7574905d7cbc2cca18d6c090265fa35b572d8e9dc62efeb5339908720d8"
+SAGE_TOKEN="0x03c0f7574905d7cbc2cca18d6c090265fa35b572d8e9dc62efeb5339908720d8"
 CDC_POOL="0x05f73c551dbfda890090c8ee89858992dfeea9794a63ad83e6b1706e9836aeba"
 JOB_MANAGER="0x00bf025663b8a7c7e43393f082b10afe66bd9ddb06fb5e521e3adbcf693094bd"
 REPUTATION_MANAGER="0x02f0ce7e13e113e91f3a4669f742e7470f2bdfb3c7146aff1d449fddf92b7dc0"
@@ -17,12 +17,12 @@ DEPLOYER_ADDRESS="0x2f5248a6b08cd6a52cb9db812e98c675be165cf803a56ac06aefbce74d1f
 TARGET_ADDRESS="0x1176a1bd84444c89232ec27754698e5d2e7e1a7f1539f12027f28b23ec9f3d8"
 
 # Keystore and account
-KEYSTORE="/Users/vaamx/cironetwork/ciro-network/CIRO_Network_Backup/20250711_061352/testnet_keystore.json"
+KEYSTORE="/Users/vaamx/sagenetwork/sage-network/SAGE_Network_Backup/20250711_061352/testnet_keystore.json"
 ACCOUNT="temp_account.json"
 
 echo "📋 Contracts to activate:"
 echo "  • Treasury Timelock: $TREASURY_TIMELOCK"
-echo "  • CIRO Token: $CIRO_TOKEN" 
+echo "  • SAGE Token: $SAGE_TOKEN" 
 echo "  • CDC Pool: $CDC_POOL"
 echo "  • Job Manager: $JOB_MANAGER"
 echo "  • Reputation Manager: $REPUTATION_MANAGER"
@@ -70,18 +70,18 @@ invoke_contract "$SIMPLE_EVENTS" "emit_event" "StarkScan Test 2"
 invoke_contract "$SIMPLE_EVENTS" "emit_event" "Activity Check"
 
 echo ""
-echo "🚀 Step 2: Generate CIRO Token Activity"
+echo "🚀 Step 2: Generate SAGE Token Activity"
 echo "========================================"
 # Small transfer (under 10k tokens threshold)
-invoke_contract "$CIRO_TOKEN" "transfer" "$TARGET_ADDRESS" "1000000000000000000" "0"  # 1 token
-invoke_contract "$CIRO_TOKEN" "approve" "$TREASURY_TIMELOCK" "5000000000000000000" "0"  # 5 tokens
+invoke_contract "$SAGE_TOKEN" "transfer" "$TARGET_ADDRESS" "1000000000000000000" "0"  # 1 token
+invoke_contract "$SAGE_TOKEN" "approve" "$TREASURY_TIMELOCK" "5000000000000000000" "0"  # 5 tokens
 
 # Generate view calls for Account Calls
-call_contract "$CIRO_TOKEN" "name"
-call_contract "$CIRO_TOKEN" "symbol" 
-call_contract "$CIRO_TOKEN" "decimals"
-call_contract "$CIRO_TOKEN" "total_supply"
-call_contract "$CIRO_TOKEN" "balance_of" "$DEPLOYER_ADDRESS"
+call_contract "$SAGE_TOKEN" "name"
+call_contract "$SAGE_TOKEN" "symbol" 
+call_contract "$SAGE_TOKEN" "decimals"
+call_contract "$SAGE_TOKEN" "total_supply"
+call_contract "$SAGE_TOKEN" "balance_of" "$DEPLOYER_ADDRESS"
 
 echo ""
 echo "🚀 Step 3: Generate Treasury Timelock Activity"  
@@ -115,7 +115,7 @@ echo "======================="
 echo ""
 echo "🌐 Check StarkScan for activity:"
 echo "  • SimpleEvents: https://sepolia.starkscan.co/contract/$SIMPLE_EVENTS"
-echo "  • CIRO Token: https://sepolia.starkscan.co/contract/$CIRO_TOKEN"
+echo "  • SAGE Token: https://sepolia.starkscan.co/contract/$SAGE_TOKEN"
 echo "  • Treasury Timelock: https://sepolia.starkscan.co/contract/$TREASURY_TIMELOCK"
 echo "  • CDC Pool: https://sepolia.starkscan.co/contract/$CDC_POOL"
 echo "  • Job Manager: https://sepolia.starkscan.co/contract/$JOB_MANAGER"

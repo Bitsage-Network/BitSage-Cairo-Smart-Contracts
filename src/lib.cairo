@@ -1,15 +1,15 @@
-// CIRO Network Smart Contracts
+// SAGE Network Smart Contracts
 // Main library file for Cairo 2.x smart contracts
 
 pub mod cdc_pool;
-pub mod ciro_token;
+pub mod sage_token;
 pub mod job_manager;
 pub mod reputation_manager;
 pub mod simple_events;
 
 pub mod interfaces {
     pub mod cdc_pool;
-    pub mod ciro_token;
+    pub mod sage_token;
     pub mod job_manager;
     pub mod proof_verifier;
     pub mod reputation_manager;

@@ -7,21 +7,21 @@ use core::array::ArrayTrait;
 use starknet::{ContractAddress, contract_address_const, get_caller_address, get_block_timestamp};
 use starknet::testing::{set_caller_address, set_block_timestamp, set_contract_address};
 
-use ciro_contracts::ciro_token::CiroToken;
-use ciro_contracts::interfaces::ciro_token::{
+use sage_contracts::sage_token::CiroToken;
+use sage_contracts::interfaces::sage_token::{
     ICiroToken, WorkerTier, WorkerTierBenefits, GovernanceProposal, GovernanceRights, GovernanceStats, 
     ProposalType, SecurityBudget, PendingTransfer, SecurityAuditReport, RateLimitInfo, EmergencyOperation
 };
-use ciro_contracts::constants::{
+use sage_contracts::constants::{
     TOTAL_SUPPLY, MAX_MINT_PERCENTAGE, SCALE, SECONDS_PER_YEAR, SECONDS_PER_MONTH,
     BASIC_WORKER_THRESHOLD, PREMIUM_WORKER_THRESHOLD, ENTERPRISE_WORKER_THRESHOLD,
     INFRASTRUCTURE_WORKER_THRESHOLD, FLEET_WORKER_THRESHOLD, DATACENTER_WORKER_THRESHOLD,
     HYPERSCALE_WORKER_THRESHOLD, INSTITUTIONAL_WORKER_THRESHOLD
 };
 
-/// CIRO Token Deployment Script
+/// SAGE Token Deployment Script
 /// 
-/// This script deploys the CIRO Token with proper security configurations
+/// This script deploys the SAGE Token with proper security configurations
 /// and initializes all necessary components for the DePIN network.
 /// 
 /// Usage:
@@ -33,7 +33,7 @@ use ciro_contracts::constants::{
 ///   6. Conduct post-deployment security review
 
 // Deployment Configuration
-const NETWORK_PHASE: felt252 = 'CIRO_v3.1_Bootstrap';
+const NETWORK_PHASE: felt252 = 'SAGE_v3.1_Bootstrap';
 const DEPLOYMENT_ENVIRONMENT: felt252 = 'mainnet'; // 'mainnet' or 'testnet'
 const SECURITY_LEVEL: felt252 = 'high'; // 'high', 'medium', 'low'
 
@@ -57,8 +57,8 @@ const LARGE_TRANSFER_DELAY: u64 = 7200; // 2 hours
 const RATE_LIMIT_WINDOW: u64 = 3600; // 1 hour
 const RATE_LIMIT_AMOUNT: u256 = 1000000; // 1M tokens per hour
 
-/// Deploy CIRO Token with full configuration
-fn deploy_ciro_token_production() -> (ContractAddress, ICiroToken) {
+/// Deploy SAGE Token with full configuration
+fn deploy_sage_token_production() -> (ContractAddress, ICiroToken) {
     let owner = contract_address_const::<OWNER_ADDRESS>();
     let job_manager = contract_address_const::<JOB_MANAGER_ADDRESS>();
     let cdc_pool = contract_address_const::<CDC_POOL_ADDRESS>();
@@ -73,36 +73,36 @@ fn deploy_ciro_token_production() -> (ContractAddress, ICiroToken) {
         NETWORK_PHASE
     );
     
-    let ciro_token = ICiroToken { contract_address };
+    let sage_token = ICiroToken { contract_address };
     
     // Configure security settings
-    configure_security_settings(@ciro_token, owner);
+    configure_security_settings(@sage_token, owner);
     
     // Initialize emergency council
-    initialize_emergency_council(@ciro_token, owner);
+    initialize_emergency_council(@sage_token, owner);
     
     // Validate deployment
-    validate_deployment(@ciro_token);
+    validate_deployment(@sage_token);
     
-    (contract_address, ciro_token)
+    (contract_address, sage_token)
 }
 
 /// Configure security settings for production
-fn configure_security_settings(ciro_token: @ICiroToken, owner: ContractAddress) {
+fn configure_security_settings(sage_token: @ICiroToken, owner: ContractAddress) {
     set_caller_address(owner);
     
     // Set security parameters
-    ciro_token.set_gas_optimization(true);
+    sage_token.set_gas_optimization(true);
     
     // Initialize security monitoring
-    ciro_token.report_suspicious_activity('deployment_init', 1);
+    sage_token.report_suspicious_activity('deployment_init', 1);
     
     // Log deployment as emergency operation
-    ciro_token.log_emergency_operation('deployment', 'CIRO Token v3.1 deployed');
+    sage_token.log_emergency_operation('deployment', 'SAGE Token v3.1 deployed');
 }
 
 /// Initialize emergency council members
-fn initialize_emergency_council(ciro_token: @ICiroToken, owner: ContractAddress) {
+fn initialize_emergency_council(sage_token: @ICiroToken, owner: ContractAddress) {
     set_caller_address(owner);
     
     // Add emergency council members
@@ -112,49 +112,49 @@ fn initialize_emergency_council(ciro_token: @ICiroToken, owner: ContractAddress)
     let multisig = contract_address_const::<EMERGENCY_MULTISIG>();
     
     // Authorize emergency council members for upgrades
-    ciro_token.authorize_upgrade(council_1, 0);
-    ciro_token.authorize_upgrade(council_2, 0);
-    ciro_token.authorize_upgrade(council_3, 0);
-    ciro_token.authorize_upgrade(multisig, 0);
+    sage_token.authorize_upgrade(council_1, 0);
+    sage_token.authorize_upgrade(council_2, 0);
+    sage_token.authorize_upgrade(council_3, 0);
+    sage_token.authorize_upgrade(multisig, 0);
 }
 
 /// Validate deployment and initial configuration
-fn validate_deployment(ciro_token: @ICiroToken) {
+fn validate_deployment(sage_token: @ICiroToken) {
     // Validate basic ERC20 functionality
-    let name = ciro_token.name();
-    let symbol = ciro_token.symbol();
-    let decimals = ciro_token.decimals();
-    let total_supply = ciro_token.total_supply();
+    let name = sage_token.name();
+    let symbol = sage_token.symbol();
+    let decimals = sage_token.decimals();
+    let total_supply = sage_token.total_supply();
     
-    assert(name == 'CIRO Network Token', 'Wrong token name');
-    assert(symbol == 'CIRO', 'Wrong token symbol');
+    assert(name == 'SAGE Network Token', 'Wrong token name');
+    assert(symbol == 'SAGE', 'Wrong token symbol');
     assert(decimals == 18, 'Wrong decimals');
     assert(total_supply == TOTAL_SUPPLY, 'Wrong total supply');
     
     // Validate security settings
-    let (version, upgrade_authorized, timelock_remaining) = ciro_token.get_contract_info();
+    let (version, upgrade_authorized, timelock_remaining) = sage_token.get_contract_info();
     assert(version == 'v3.1.0', 'Wrong contract version');
     
     // Validate governance settings
-    let governance_stats = ciro_token.get_governance_stats();
+    let governance_stats = sage_token.get_governance_stats();
     assert(governance_stats.total_proposals == 0, 'Should have no initial proposals');
     
     // Validate tokenomics
-    let (total_revenue, monthly_revenue, burn_efficiency) = ciro_token.get_revenue_stats();
+    let (total_revenue, monthly_revenue, burn_efficiency) = sage_token.get_revenue_stats();
     assert(total_revenue == 0, 'Should have no initial revenue');
     assert(burn_efficiency == 0, 'Should have no initial burn efficiency');
     
     // Validate network phase
-    let network_phase = ciro_token.get_network_phase();
+    let network_phase = sage_token.get_network_phase();
     assert(network_phase == NETWORK_PHASE, 'Wrong network phase');
 }
 
 /// Post-deployment configuration for production
-fn post_deployment_configuration(ciro_token: @ICiroToken, owner: ContractAddress) {
+fn post_deployment_configuration(sage_token: @ICiroToken, owner: ContractAddress) {
     set_caller_address(owner);
     
     // Initial security audit
-    ciro_token.submit_security_audit(
+    sage_token.submit_security_audit(
         0, // No findings initially
         INITIAL_SECURITY_SCORE,
         0, // No critical issues
@@ -162,11 +162,11 @@ fn post_deployment_configuration(ciro_token: @ICiroToken, owner: ContractAddress
     );
     
     // Set up initial governance parameters
-    let governance_rights = ciro_token.get_governance_rights(owner);
+    let governance_rights = sage_token.get_governance_rights(owner);
     assert(governance_rights.can_create_proposals, 'Owner should have governance rights');
     
     // Create initial governance proposal for network parameters
-    let proposal_id = ciro_token.create_typed_proposal(
+    let proposal_id = sage_token.create_typed_proposal(
         'Initialize Network Parameters',
         'Set initial network configuration and security parameters',
         0, // Minor change type
@@ -174,10 +174,10 @@ fn post_deployment_configuration(ciro_token: @ICiroToken, owner: ContractAddress
     );
     
     // Vote on the proposal
-    ciro_token.vote_on_proposal(proposal_id, true);
+    sage_token.vote_on_proposal(proposal_id, true);
     
     // Log configuration completion
-    ciro_token.log_emergency_operation('config_complete', 'Post-deployment configuration completed');
+    sage_token.log_emergency_operation('config_complete', 'Post-deployment configuration completed');
 }
 
 /// Deploy for testnet environment
@@ -194,34 +194,34 @@ fn deploy_testnet() -> (ContractAddress, ICiroToken) {
         job_manager,
         cdc_pool,
         paymaster,
-        'CIRO_v3.1_Testnet'
+        'SAGE_v3.1_Testnet'
     );
     
-    let ciro_token = ICiroToken { contract_address };
+    let sage_token = ICiroToken { contract_address };
     
     // Configure for testing
-    configure_testnet_settings(@ciro_token, owner);
+    configure_testnet_settings(@sage_token, owner);
     
-    (contract_address, ciro_token)
+    (contract_address, sage_token)
 }
 
 /// Configure settings for testnet
-fn configure_testnet_settings(ciro_token: @ICiroToken, owner: ContractAddress) {
+fn configure_testnet_settings(sage_token: @ICiroToken, owner: ContractAddress) {
     set_caller_address(owner);
     
     // Enable gas optimization for testing
-    ciro_token.set_gas_optimization(true);
+    sage_token.set_gas_optimization(true);
     
     // Set up test users with different tiers
     let test_user_1 = contract_address_const::<'test_user_1'>();
     let test_user_2 = contract_address_const::<'test_user_2'>();
     
     // Transfer tokens to create different worker tiers
-    ciro_token.transfer(test_user_1, BASIC_WORKER_THRESHOLD * SCALE);
-    ciro_token.transfer(test_user_2, PREMIUM_WORKER_THRESHOLD * SCALE);
+    sage_token.transfer(test_user_1, BASIC_WORKER_THRESHOLD * SCALE);
+    sage_token.transfer(test_user_2, PREMIUM_WORKER_THRESHOLD * SCALE);
     
     // Test governance proposal
-    let proposal_id = ciro_token.create_typed_proposal(
+    let proposal_id = sage_token.create_typed_proposal(
         'Test Proposal',
         'Testing governance functionality',
         0, // Minor change
@@ -229,7 +229,7 @@ fn configure_testnet_settings(ciro_token: @ICiroToken, owner: ContractAddress) {
     );
     
     // Submit test audit
-    ciro_token.submit_security_audit(
+    sage_token.submit_security_audit(
         2, // Minor findings
         95, // Good score
         0, // No critical issues
@@ -237,32 +237,32 @@ fn configure_testnet_settings(ciro_token: @ICiroToken, owner: ContractAddress) {
     );
     
     // Log testnet deployment
-    ciro_token.log_emergency_operation('testnet_deploy', 'Testnet deployment completed');
+    sage_token.log_emergency_operation('testnet_deploy', 'Testnet deployment completed');
 }
 
 /// Run deployment based on environment
 fn main() {
     if DEPLOYMENT_ENVIRONMENT == 'mainnet' {
-        let (contract_address, ciro_token) = deploy_ciro_token_production();
+        let (contract_address, sage_token) = deploy_sage_token_production();
         
         // Get deployment information
-        let total_supply = ciro_token.total_supply();
-        let network_phase = ciro_token.get_network_phase();
-        let (version, _, _) = ciro_token.get_contract_info();
+        let total_supply = sage_token.total_supply();
+        let network_phase = sage_token.get_network_phase();
+        let (version, _, _) = sage_token.get_contract_info();
         
         // Log deployment success
         // In a real deployment, these would be printed to console
-        // print!("✅ CIRO Token deployed successfully!");
+        // print!("✅ SAGE Token deployed successfully!");
         // print!("📍 Contract Address: {}", contract_address);
         // print!("🪙 Total Supply: {}", total_supply);
         // print!("📜 Version: {}", version);
         // print!("🌐 Network Phase: {}", network_phase);
         
         // Run post-deployment configuration
-        post_deployment_configuration(@ciro_token, contract_address_const::<OWNER_ADDRESS>());
+        post_deployment_configuration(@sage_token, contract_address_const::<OWNER_ADDRESS>());
         
         // Final validation
-        validate_deployment(@ciro_token);
+        validate_deployment(@sage_token);
         
         // print!("✅ Deployment and configuration completed successfully!");
         // print!("📋 Next steps:");
@@ -274,14 +274,14 @@ fn main() {
         
     } else {
         // Testnet deployment
-        let (contract_address, ciro_token) = deploy_testnet();
+        let (contract_address, sage_token) = deploy_testnet();
         
         // Get testnet deployment information
-        let total_supply = ciro_token.total_supply();
-        let network_phase = ciro_token.get_network_phase();
+        let total_supply = sage_token.total_supply();
+        let network_phase = sage_token.get_network_phase();
         
         // Log testnet deployment
-        // print!("🧪 CIRO Token deployed to testnet!");
+        // print!("🧪 SAGE Token deployed to testnet!");
         // print!("📍 Contract Address: {}", contract_address);
         // print!("🪙 Total Supply: {}", total_supply);
         // print!("🌐 Network Phase: {}", network_phase);

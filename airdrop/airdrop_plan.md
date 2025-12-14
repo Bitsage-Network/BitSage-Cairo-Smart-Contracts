@@ -1,14 +1,14 @@
-# CIRO Token Airdrop Plan (Testnet)
+# SAGE Token Airdrop Plan (Testnet)
 
-This plan documents the addresses, tooling and steps to safely distribute CIRO from the main holder to 10 recipient accounts using a separate keystore.
+This plan documents the addresses, tooling and steps to safely distribute SAGE from the main holder to 10 recipient accounts using a separate keystore.
 
 - Network: Starknet Sepolia
-- Token (CIRO): `0x03c0f7574905d7cbc2cca18d6c090265fa35b572d8e9dc62efeb5339908720d8`
+- Token (SAGE): `0x03c0f7574905d7cbc2cca18d6c090265fa35b572d8e9dc62efeb5339908720d8`
 - Decimals: 18
-- Total Supply (on-chain): 50,000,000 CIRO
+- Total Supply (on-chain): 50,000,000 SAGE
 - Main Holder (deployer): `0x0737c361e784a8f58508c211d50e397059590a416c373ed527b9a45287eacfc2` (balance confirmed)
-- Main Holder account file: keep under `CIRO_Network_Backup/.../testnet_account.json` or equivalent
-- Main Holder keystore: `CIRO_Network_Backup/20250711_061352/testnet_keystore.json`
+- Main Holder account file: keep under `SAGE_Network_Backup/.../testnet_account.json` or equivalent
+- Main Holder keystore: `SAGE_Network_Backup/20250711_061352/testnet_keystore.json`
 - Recipients registry: `cairo-contracts/airdrop/recipients.json` (this file)
 - Airdrop script: `cairo-contracts/airdrop/airdrop.sh`
 
@@ -25,7 +25,7 @@ This plan documents the addresses, tooling and steps to safely distribute CIRO f
    - Compute their addresses (no need to deploy immediately to receive ERC20 balances)
    - Write the resulting addresses into `recipients.json`
 
-2. Review `recipients.json` and decide per-recipient amount (default: 100,000 CIRO each)
+2. Review `recipients.json` and decide per-recipient amount (default: 100,000 SAGE each)
 
 3. Run the airdrop:
    - Execute `./airdrop.sh` (it loops over `recipients.json` and submits `transfer` calls)
