@@ -149,7 +149,7 @@ mod FeeManager {
         BPS_DENOMINATOR,
     };
     use starknet::{
-        ContractAddress, get_caller_address, get_block_timestamp,
+        ContractAddress, get_caller_address,
     };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
@@ -157,6 +157,7 @@ mod FeeManager {
         Map,
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use core::num::traits::Zero;
 
     // =========================================================================
     // Storage
@@ -260,6 +261,12 @@ mod FeeManager {
         treasury: ContractAddress,
         job_manager: ContractAddress,
     ) {
+        // Phase 3: Validate constructor parameters
+        assert!(!owner.is_zero(), "Invalid owner address");
+        assert!(!sage_token.is_zero(), "Invalid token address");
+        assert!(!treasury.is_zero(), "Invalid treasury address");
+        // Note: job_manager can be zero initially and set later
+
         self.owner.write(owner);
         self.sage_token.write(sage_token);
         self.treasury.write(treasury);
@@ -445,16 +452,28 @@ mod FeeManager {
                 caller == self.staking_contract.read() || caller == self.owner.read(),
                 'Unauthorized'
             );
-            
+
+            // Phase 3: Validate stake share doesn't exceed 100%
+            assert(stake_share_bps <= BPS_DENOMINATOR, 'Share exceeds 100%');
+
             let mut reward = self.staker_rewards.read(staker);
             let epoch = self.current_epoch.read();
-            
+
+            // Phase 3: Update total_staker_share atomically
+            let old_share = reward.stake_share_bps;
+            let current_total = self.total_staker_share.read();
+
+            // Calculate new total (subtract old, add new)
+            let new_total = current_total - old_share + stake_share_bps;
+            assert(new_total <= BPS_DENOMINATOR, 'Total share exceeds 100%');
+            self.total_staker_share.write(new_total);
+
             // Calculate and store pending rewards before changing share
             let pending = self._calculate_pending_rewards(staker, epoch);
             reward.pending_rewards = reward.pending_rewards + pending;
             reward.stake_share_bps = stake_share_bps;
             reward.last_calculated_epoch = epoch;
-            
+
             self.staker_rewards.write(staker, reward);
         }
 
@@ -522,37 +541,64 @@ mod FeeManager {
             }
         }
 
+        /// Phase 3: Calculate pending rewards with comprehensive zero-division protection
+        /// @dev Uses proportional share calculation: reward = pool * staker_share / total_share
+        /// @param staker The staker address to calculate rewards for
+        /// @param current_epoch The current epoch number
+        /// @return pending The calculated pending reward amount
         fn _calculate_pending_rewards(
             self: @ContractState,
             staker: ContractAddress,
             current_epoch: u64,
         ) -> u256 {
             let reward = self.staker_rewards.read(staker);
-            
+
+            // Early return if staker has no share
             if reward.stake_share_bps == 0 {
                 return 0;
             }
-            
+
             // Sum up rewards from unclaimed epochs
             let mut pending: u256 = 0;
             let mut epoch = reward.last_calculated_epoch;
-            
+
+            // Limit epoch iteration to prevent excessive gas (max 365 epochs = ~1 year)
+            let max_epochs: u64 = 365;
+            let mut iterations: u64 = 0;
+
             loop {
                 if epoch >= current_epoch {
                     break;
                 }
+                if iterations >= max_epochs {
+                    break; // Prevent gas exhaustion
+                }
+
                 epoch = epoch + 1;
-                
+                iterations = iterations + 1;
+
                 let pool = self.epoch_staker_pool.read(epoch);
+
+                // Skip if no rewards in this epoch
+                if pool == 0 {
+                    continue;
+                }
+
                 let total_share = self.total_staker_share.read();
-                
+
+                // Phase 3: Explicit zero-division protection
+                // This should never happen if update_staker_share is called correctly,
+                // but we protect against edge cases (e.g., all stakers unstake)
                 if total_share > 0 {
-                    // Staker's share of the epoch pool
+                    // Calculate proportional reward: pool * staker_share / total_share
+                    // Note: This is safe because we checked total_share > 0
                     let epoch_reward = (pool * reward.stake_share_bps) / total_share;
                     pending = pending + epoch_reward;
                 }
+                // If total_share == 0, the epoch pool remains undistributed
+                // This is an edge case that shouldn't occur in practice
             };
-            
+
             pending
         }
     }

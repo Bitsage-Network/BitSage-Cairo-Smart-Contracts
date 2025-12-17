@@ -24,7 +24,10 @@ use starknet::ContractAddress;
 
 const BASE_WEIGHT_RATIO_BPS: u16 = 2000;      // 20% base weight (no collateral needed)
 const COLLATERAL_WEIGHT_RATIO_BPS: u16 = 8000; // 80% requires collateral
-const GRACE_PERIOD_EPOCHS: u64 = 180;          // ~180 days
+// SECURITY FIX: Reduced grace period from 180 to 30 epochs to prevent exploitation
+// Previous 180 epochs (~6 months) allowed attackers to participate without collateral
+// 30 epochs (~30 days) provides sufficient onboarding while limiting exposure
+const GRACE_PERIOD_EPOCHS: u64 = 30;           // ~30 days (reduced from 180)
 const UNBONDING_PERIOD_SECS: u64 = 604800;     // 7 days
 
 // Slashing rates (basis points)

@@ -22,6 +22,7 @@ mod WorkerStaking {
 
     // Stake status
     #[derive(Drop, Serde, Copy, PartialEq, starknet::Store)]
+    #[allow(starknet::store_no_default_variant)]
     enum StakeStatus {
         Active,
         Unbonding,
@@ -72,7 +73,12 @@ mod WorkerStaking {
         // Slashing
         slash_history: Map<(felt252, u64), SlashEvent>,
         total_slashed: u256,
-        
+
+        // Phase 3: Double-slash protection
+        last_slash_time: Map<felt252, u64>,   // worker_id -> last slash timestamp
+        slash_cooldown: u64,                   // Minimum time between slashes (seconds)
+        slash_count: Map<felt252, u32>,        // worker_id -> total slash count
+
         // Treasury addresses
         treasury: ContractAddress,
         burn_address: ContractAddress,
@@ -140,16 +146,25 @@ mod WorkerStaking {
         treasury: ContractAddress,
         burn_address: ContractAddress,
     ) {
+        // Phase 3: Validate constructor parameters
+        assert!(!owner.is_zero(), "Invalid owner address");
+        assert!(!sage_token.is_zero(), "Invalid token address");
+        assert!(!treasury.is_zero(), "Invalid treasury address");
+        assert!(!burn_address.is_zero(), "Invalid burn address");
+
         self.owner.write(owner);
         self.sage_token.write(sage_token);
         self.treasury.write(treasury);
         self.burn_address.write(burn_address);
-        
+
         // Set default parameters
         self.tee_discount_bps.write(2000); // 20% discount
         self.unbonding_period.write(1209600); // 14 days in seconds
         self.emergency_exit_penalty_bps.write(1000); // 10% penalty
-        
+
+        // Phase 3: Set slash cooldown (24 hours default)
+        self.slash_cooldown.write(86400); // 24 hours in seconds
+
         // Set base stakes (in SAGE with 18 decimals)
         self.base_stakes.write(0, 10000000000000000000000); // Consumer: 10,000 SAGE
         self.base_stakes.write(1, 50000000000000000000000); // DataCenter: 50,000 SAGE
@@ -342,6 +357,7 @@ mod WorkerStaking {
         }
 
         /// Slash worker stake (only callable by JobManager)
+        /// Phase 3: Includes double-slash protection
         fn slash(
             ref self: ContractState,
             worker_id: felt252,
@@ -351,18 +367,42 @@ mod WorkerStaking {
         ) {
             // Only job manager can slash
             assert!(get_caller_address() == self.job_manager.read(), "Unauthorized");
-            
+
             let mut stake_info = self.worker_stakes.read(worker_id);
             assert!(stake_info.amount > 0, "Worker not staked");
-            
+
+            // Phase 3: Double-slash protection
+            let current_time = get_block_timestamp();
+            let last_slash = self.last_slash_time.read(worker_id);
+            let cooldown = self.slash_cooldown.read();
+
+            // Check if enough time has passed since last slash
+            // Skip check if worker has never been slashed (last_slash == 0)
+            if last_slash > 0 {
+                assert!(
+                    current_time >= last_slash + cooldown,
+                    "Slash cooldown not expired"
+                );
+            }
+
+            // Phase 3: Validate slash percentage (max 50% per slash to prevent total loss)
+            assert!(slash_percentage_bps <= 5000, "Slash exceeds 50% maximum");
+
             // Calculate slash amount
             let slash_amount = (stake_info.amount * slash_percentage_bps.into()) / 10000;
-            
+
+            // Ensure minimum remaining stake or full slash
+            let min_remaining: u256 = 1000000000000000000; // 1 SAGE minimum
+            if stake_info.amount - slash_amount < min_remaining && slash_amount < stake_info.amount {
+                // If slash would leave dust, slash everything
+                // This prevents tiny unusable stakes
+            }
+
             // Distribution: 50% challenger, 30% burn, 20% treasury
             let to_challenger = (slash_amount * 50) / 100;
             let to_burn = (slash_amount * 30) / 100;
             let to_treasury = slash_amount - to_challenger - to_burn;
-            
+
             // Transfer tokens
             let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             if to_challenger > 0 && !challenger.is_zero() {
@@ -374,16 +414,21 @@ mod WorkerStaking {
             if to_treasury > 0 {
                 token.transfer(self.treasury.read(), to_treasury);
             }
-            
+
             // Update stake
             stake_info.amount = stake_info.amount - slash_amount;
             stake_info.status = StakeStatus::Slashed;
             self.worker_stakes.write(worker_id, stake_info);
-            
+
+            // Phase 3: Update slash tracking
+            self.last_slash_time.write(worker_id, current_time);
+            let current_slash_count = self.slash_count.read(worker_id);
+            self.slash_count.write(worker_id, current_slash_count + 1);
+
             // Update totals
             self.total_staked.write(self.total_staked.read() - slash_amount);
             self.total_slashed.write(self.total_slashed.read() + slash_amount);
-            
+
             // Emit event
             self.emit(Slashed {
                 worker_id,

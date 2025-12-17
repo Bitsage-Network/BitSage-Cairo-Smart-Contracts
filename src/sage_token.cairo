@@ -24,20 +24,39 @@ pub mod SAGEToken {
     use core::traits::Into;
     use core::array::ArrayTrait;
     use core::num::traits::zero::Zero;
-    
+    use starknet::SyscallResultTrait;
+
     use sage_contracts::interfaces::sage_token::{
         ISAGEToken, GovernanceProposal, BurnEvent, GovernanceRights, GovernanceStats,
         SecurityBudget, RateLimitInfo, EmergencyOperation, PendingTransfer,
         ProposalStatus
     };
     use openzeppelin::security::pausable::PausableComponent;
+    use openzeppelin::upgrades::UpgradeableComponent;
+    use openzeppelin::upgrades::interface::IUpgradeable;
+    use starknet::ClassHash;
+
+    // Component declarations
+    component!(path: PausableComponent, storage: pausable, event: PausableEvent);
+    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
     use sage_contracts::utils::constants::{
-        TOTAL_SUPPLY, PHASE_BOOTSTRAP,
+        TOTAL_SUPPLY, MAX_SUPPLY, PHASE_BOOTSTRAP, SECONDS_PER_MONTH,
         VETERAN_HOLDER_MINIMUM_PERIOD, LONG_TERM_HOLDER_MINIMUM_PERIOD,
         VOTING_POWER_MULTIPLIER_LONG_TERM, VOTING_POWER_MULTIPLIER_VETERAN,
-        GOVERNANCE_MINOR_THRESHOLD, GOVERNANCE_MAJOR_THRESHOLD, 
+        GOVERNANCE_MINOR_THRESHOLD, GOVERNANCE_MAJOR_THRESHOLD,
         GOVERNANCE_PROTOCOL_THRESHOLD, GOVERNANCE_EMERGENCY_THRESHOLD,
-        GOVERNANCE_STRATEGIC_THRESHOLD, QUORUM_PERCENTAGE
+        GOVERNANCE_STRATEGIC_THRESHOLD, QUORUM_PERCENTAGE,
+        // Allocation pools
+        ALLOC_ECOSYSTEM_REWARDS, ALLOC_TREASURY, ALLOC_TEAM, ALLOC_MARKET_LIQUIDITY,
+        ALLOC_PRE_SEED, ALLOC_CODE_DEV_INFRA, ALLOC_PUBLIC_SALE, ALLOC_STRATEGIC_PARTNERS,
+        ALLOC_SEED, ALLOC_ADVISORS, TGE_TOTAL, TGE_PUBLIC_SALE,
+        // Vesting periods
+        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS, VEST_PRE_SEED_MONTHS,
+        VEST_CODE_DEV_MONTHS, VEST_PUBLIC_SALE_MONTHS, VEST_STRATEGIC_MONTHS,
+        VEST_SEED_MONTHS, VEST_ADVISORS_CLIFF, VEST_ADVISORS_MONTHS,
+        // Emission rates
+        EMISSION_RATE_YEAR_1, EMISSION_RATE_YEAR_2, EMISSION_RATE_YEAR_3,
+        EMISSION_RATE_YEAR_4, EMISSION_RATE_YEAR_5
     };
 
     /// Contract constants based on v3.0 tokenomics
@@ -167,13 +186,61 @@ pub mod SAGEToken {
         // Pausable component storage
         #[substorage(v0)]
         pausable: PausableComponent::Storage,
-        
+
+        // Upgradeable component storage
+        #[substorage(v0)]
+        upgradeable: UpgradeableComponent::Storage,
+
+        // Upgrade governance
+        upgrade_delay: u64,                     // Timelock delay for upgrades (seconds)
+        pending_upgrade: ClassHash,             // Pending upgrade class hash
+        upgrade_scheduled_at: u64,              // When upgrade was scheduled
+
         // Security features
         blacklisted_addresses: Map<ContractAddress, bool>,
         max_inflation_rate: u256,
         // Rate limiting
         daily_transfer_amount: u256,
         rate_limit_window_start: u64,
+
+        // Phase 3: Revenue-based burn rate adjustment
+        target_monthly_revenue: u256,           // Target revenue for baseline burn rate
+        revenue_burn_modifier_max: u32,         // Max burn rate adjustment in basis points (e.g., 500 = 5%)
+        revenue_burn_enabled: bool,             // Whether to use revenue-based burn adjustment
+        last_revenue_burn_adjustment: i32,      // Track last adjustment for events/debugging
+
+        // Phase 3.7: Token flow reconciliation tracking
+        total_minted: u256,                     // Total tokens ever minted (excluding initial supply)
+        snapshot_count: u256,                   // Number of snapshots taken
+        last_snapshot_time: u64,                // Timestamp of last snapshot
+        milestone_burn_10pct: bool,             // Milestone: 10% of initial supply burned
+        milestone_burn_25pct: bool,             // Milestone: 25% of initial supply burned
+        milestone_burn_50pct: bool,             // Milestone: 50% of initial supply burned
+        milestone_revenue_1m: bool,             // Milestone: 1M SAGE revenue collected
+        milestone_revenue_10m: bool,            // Milestone: 10M SAGE revenue collected
+
+        // Emission Schedule: Allocation pool tracking
+        pool_ecosystem_remaining: u256,         // Remaining in ecosystem rewards pool
+        pool_ecosystem_emitted: u256,           // Total emitted from ecosystem pool
+        pool_treasury_remaining: u256,          // Remaining in treasury pool
+        pool_treasury_released: u256,           // Released from treasury
+        pool_team_remaining: u256,              // Remaining in team pool
+        pool_team_released: u256,               // Released to team
+        pool_public_sale_remaining: u256,       // Remaining post-TGE public sale
+        pool_pre_seed_remaining: u256,          // Remaining pre-seed
+        pool_seed_remaining: u256,              // Remaining seed
+        pool_strategic_remaining: u256,         // Remaining strategic
+        pool_advisors_remaining: u256,          // Remaining advisors
+        pool_code_dev_remaining: u256,          // Remaining code dev & infra
+
+        // Emission timing
+        last_ecosystem_emission: u64,           // Last ecosystem emission timestamp
+        ecosystem_emission_month: u32,          // Current emission month (1-60)
+
+        // Beneficiary addresses for vesting
+        treasury_beneficiary: ContractAddress,
+        team_beneficiary: ContractAddress,
+        liquidity_beneficiary: ContractAddress,
     }
 
     #[event]
@@ -212,6 +279,27 @@ pub mod SAGEToken {
         UpgradeAuthorized: UpgradeAuthorized,
         EmergencyWithdrawal: EmergencyWithdrawal,
         SecurityThresholdChanged: SecurityThresholdChanged,
+        // Phase 3: Revenue-based burn rate events
+        RevenueBurnRateAdjusted: RevenueBurnRateAdjusted,
+        RevenueBurnConfigUpdated: RevenueBurnConfigUpdated,
+        // Phase 3.6: Max supply events
+        MaxSupplyWarning: MaxSupplyWarning,
+        // Phase 3.7: Token flow reconciliation events
+        TokenFlowSnapshot: TokenFlowSnapshot,
+        MilestoneReached: MilestoneReached,
+        // Emission schedule events
+        EcosystemEmission: EcosystemEmission,
+        VestingReleased: VestingReleased,
+        TGECompleted: TGECompleted,
+        // Upgrade events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
+        // Component events
+        #[flat]
+        PausableEvent: PausableComponent::Event,
+        #[flat]
+        UpgradeableEvent: UpgradeableComponent::Event,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -477,69 +565,255 @@ pub mod SAGEToken {
         timestamp: u64,
     }
 
+    // Phase 3: Revenue-based burn rate events
+    #[derive(Drop, starknet::Event)]
+    struct RevenueBurnRateAdjusted {
+        #[key]
+        base_rate: u32,
+        revenue_modifier: i32,
+        effective_rate: u32,
+        monthly_revenue: u256,
+        target_revenue: u256,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct RevenueBurnConfigUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        target_monthly_revenue: u256,
+        modifier_max: u32,
+        enabled: bool,
+        timestamp: u64,
+    }
+
+    // Phase 3.6: Max supply warning event
+    #[derive(Drop, starknet::Event)]
+    struct MaxSupplyWarning {
+        current_supply: u256,
+        max_supply: u256,
+        percentage_used: u32,   // Basis points (9000 = 90%)
+        timestamp: u64,
+    }
+
+    // Phase 3.7: Token flow reconciliation events
+    #[derive(Drop, starknet::Event)]
+    struct TokenFlowSnapshot {
+        #[key]
+        snapshot_id: u256,
+        total_supply: u256,
+        total_burned: u256,
+        total_minted: u256,
+        total_revenue: u256,
+        monthly_revenue: u256,
+        burn_rate_bps: u32,
+        inflation_rate_bps: u32,
+        supply_utilization_bps: u32,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct MilestoneReached {
+        #[key]
+        milestone_type: felt252,  // 'burn_10pct', 'burn_25pct', 'revenue_1m', etc.
+        value: u256,
+        timestamp: u64,
+    }
+
+    // Emission schedule events
+    #[derive(Drop, starknet::Event)]
+    struct EcosystemEmission {
+        #[key]
+        month: u32,
+        amount: u256,
+        remaining_pool: u256,
+        emission_rate_bps: u32,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct VestingReleased {
+        #[key]
+        pool_name: felt252,
+        #[key]
+        beneficiary: ContractAddress,
+        amount: u256,
+        total_released: u256,
+        remaining: u256,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct TGECompleted {
+        market_liquidity: u256,
+        public_sale_tge: u256,
+        total_circulating: u256,
+        timestamp: u64,
+    }
+
+    // Upgrade governance events
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_by: ContractAddress,
+        execute_after: u64,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        old_class_hash: ClassHash,
+        #[key]
+        new_class_hash: ClassHash,
+        executed_by: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_by: ContractAddress,
+        timestamp: u64,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
         job_manager: ContractAddress,
         cdc_pool: ContractAddress,
-        paymaster: ContractAddress
+        paymaster: ContractAddress,
+        treasury_beneficiary: ContractAddress,
+        team_beneficiary: ContractAddress,
+        liquidity_beneficiary: ContractAddress
     ) {
+        let now = get_block_timestamp();
+
         // Initialize ERC20 metadata
         self.name.write(NAME);
         self.symbol.write(SYMBOL);
         self.decimals.write(DECIMALS);
-        self.total_supply.write(TOTAL_SUPPLY);
-        
-        // Set initial balances (treasury holds most tokens)
-        self.balances.write(owner, INITIAL_CIRCULATING);
-        
-        // Initialize tokenomics parameters (v3.0 schedule)
-        self.current_inflation_rate.write(800); // 8% initial inflation
+
+        // EMISSION MODEL: Only mint TGE amounts, not full supply
+        // TGE: Market Liquidity (100M) + Public Sale TGE (10M) = 110M
+        self.total_supply.write(TGE_TOTAL);
+
+        // Distribute TGE tokens
+        // Market Liquidity: 100M to liquidity beneficiary
+        self.balances.write(liquidity_beneficiary, ALLOC_MARKET_LIQUIDITY);
+        // Public Sale TGE: 10M (20% of 50M) to owner for distribution
+        self.balances.write(owner, TGE_PUBLIC_SALE);
+
+        // Initialize allocation pools (remaining amounts to be emitted/vested)
+        self.pool_ecosystem_remaining.write(ALLOC_ECOSYSTEM_REWARDS); // 300M
+        self.pool_ecosystem_emitted.write(0);
+        self.pool_treasury_remaining.write(ALLOC_TREASURY); // 150M
+        self.pool_treasury_released.write(0);
+        self.pool_team_remaining.write(ALLOC_TEAM); // 150M
+        self.pool_team_released.write(0);
+        self.pool_public_sale_remaining.write(ALLOC_PUBLIC_SALE - TGE_PUBLIC_SALE); // 40M remaining
+        self.pool_pre_seed_remaining.write(ALLOC_PRE_SEED); // 75M
+        self.pool_seed_remaining.write(ALLOC_SEED); // 50M
+        self.pool_strategic_remaining.write(ALLOC_STRATEGIC_PARTNERS); // 50M
+        self.pool_advisors_remaining.write(ALLOC_ADVISORS); // 25M
+        self.pool_code_dev_remaining.write(ALLOC_CODE_DEV_INFRA); // 50M
+
+        // Emission timing
+        self.last_ecosystem_emission.write(now);
+        self.ecosystem_emission_month.write(0);
+
+        // Set beneficiary addresses
+        self.treasury_beneficiary.write(treasury_beneficiary);
+        self.team_beneficiary.write(team_beneficiary);
+        self.liquidity_beneficiary.write(liquidity_beneficiary);
+
+        // Initialize tokenomics parameters
+        self.current_inflation_rate.write(0); // No inflation - emission model
         self.current_burn_rate.write(3000); // 30% initial burn rate
-        self.last_inflation_update.write(get_block_timestamp());
-        
+        self.last_inflation_update.write(now);
+
         // Initialize security budget
         let security_budget = SecurityBudget {
             annual_budget_usd: MIN_SECURITY_BUDGET_USD,
             current_reserves: 0,
-            last_replenishment: get_block_timestamp(),
+            last_replenishment: now,
             guard_band_active: true,
         };
         self.security_budget.write(security_budget);
         self.annual_security_budget_usd.write(MIN_SECURITY_BUDGET_USD);
         self.guard_band_active.write(true);
-        
+
         // Initialize governance
         self.proposal_count.write(0);
-        
+
         // Initialize tracking
         self.burn_history_count.write(0);
         self.total_revenue_collected.write(0);
         self.monthly_revenue.write(0);
-        self.last_revenue_reset.write(get_block_timestamp());
-        
+        self.last_revenue_reset.write(now);
+
+        // Phase 3: Initialize revenue-based burn rate config
+        self.target_monthly_revenue.write(10_000_000_000_000_000_000_000); // 10,000 SAGE
+        self.revenue_burn_modifier_max.write(500); // Max 5% adjustment
+        self.revenue_burn_enabled.write(true);
+        self.last_revenue_burn_adjustment.write(0);
+
+        // Phase 3.7: Initialize token flow reconciliation tracking
+        self.total_minted.write(TGE_TOTAL); // Track TGE as initial mint
+        self.snapshot_count.write(0);
+        self.last_snapshot_time.write(now);
+        self.milestone_burn_10pct.write(false);
+        self.milestone_burn_25pct.write(false);
+        self.milestone_burn_50pct.write(false);
+        self.milestone_revenue_1m.write(false);
+        self.milestone_revenue_10m.write(false);
+
         // Set contract addresses
         self.owner.write(owner);
         self.job_manager_address.write(job_manager);
         self.cdc_pool_address.write(cdc_pool);
         self.paymaster_address.write(paymaster);
-        
+
         // Initialize phase tracking
-        self.launch_timestamp.write(get_block_timestamp());
+        self.launch_timestamp.write(now);
         self.network_phase.write(PHASE_BOOTSTRAP);
-        
+
         // Contract starts unpaused
         self.paused.write(false);
-        
-        // Emit initial transfer event
+
+        // Initialize upgrade governance with 48-hour timelock
+        self.upgrade_delay.write(172800); // 48 hours in seconds
+        self.pending_upgrade.write(0.try_into().unwrap()); // No pending upgrade
+        self.upgrade_scheduled_at.write(0);
+
+        // Emit TGE events
+        self.emit(Transfer {
+            from: 0.try_into().unwrap(),
+            to: liquidity_beneficiary,
+            value: ALLOC_MARKET_LIQUIDITY,
+        });
         self.emit(Transfer {
             from: 0.try_into().unwrap(),
             to: owner,
-            value: INITIAL_CIRCULATING,
+            value: TGE_PUBLIC_SALE,
         });
+        self.emit(Event::TGECompleted(TGECompleted {
+            market_liquidity: ALLOC_MARKET_LIQUIDITY,
+            public_sale_tge: TGE_PUBLIC_SALE,
+            total_circulating: TGE_TOTAL,
+            timestamp: now,
+        }));
 
-        // Initialize security defaults for Task 26.5
+        // Initialize batch operation and rate limits
+        self.batch_operation_limit.write(100); // Allow up to 100 recipients per batch
+        self.max_inflation_adjustment_per_month.write(3); // Max 3 adjustments per month
+        self.transfer_rate_window.write(86400); // 24-hour rate limit window
+        self.transfer_rate_limit.write(100_000_000_000_000_000_000_000_000); // 100M SAGE max per window
+
+        // Initialize security defaults
         self._initialize_security_defaults();
     }
 
@@ -656,19 +930,37 @@ pub mod SAGEToken {
         fn mint(ref self: ContractState, to: ContractAddress, amount: u256, reason: felt252) {
             self._only_authorized();
             self._not_paused();
-            
+
             // Check if this is within governance parameters or emergency
             if reason != 'emergency' {
                 self._check_inflation_limits(amount);
             }
-            
+
             let current_supply = self.total_supply.read();
             let new_supply = current_supply + amount;
-            
+
+            // Phase 3.6: Enforce maximum supply cap
+            assert(new_supply <= MAX_SUPPLY, 'Exceeds max supply cap');
+
             self.total_supply.write(new_supply);
             let current_balance = self.balances.read(to);
             self.balances.write(to, current_balance + amount);
-            
+
+            // Phase 3.6: Emit warning if approaching max supply (90% threshold)
+            let percentage_used: u256 = (new_supply * 10000) / MAX_SUPPLY;
+            if percentage_used >= 9000 {
+                self.emit(Event::MaxSupplyWarning(MaxSupplyWarning {
+                    current_supply: new_supply,
+                    max_supply: MAX_SUPPLY,
+                    percentage_used: percentage_used.try_into().unwrap_or(10000),
+                    timestamp: get_block_timestamp(),
+                }));
+            }
+
+            // Phase 3.7: Track total minted
+            let current_minted = self.total_minted.read();
+            self.total_minted.write(current_minted + amount);
+
             self.emit(Mint { to, amount, reason });
             self.emit(Transfer {
                 from: 0.try_into().unwrap(),
@@ -706,7 +998,10 @@ pub mod SAGEToken {
             
             // Update revenue tracking
             self._update_revenue_tracking(revenue_source);
-            
+
+            // Phase 3.7: Check burn milestones
+            self._check_burn_milestones(burned + amount);
+
             self.emit(Burn { amount, revenue_source, execution_price, burn_rate });
         }
 
@@ -1492,6 +1787,520 @@ pub mod SAGEToken {
                 execute_after: upgrade_time,
             }));
         }
+
+        // Phase 3: Revenue-based burn rate configuration functions
+
+        fn set_revenue_burn_config(
+            ref self: ContractState,
+            target_monthly_revenue: u256,
+            modifier_max: u32,
+            enabled: bool
+        ) {
+            self._only_authorized();
+
+            // Validate modifier_max doesn't exceed 20% (2000 bps)
+            assert(modifier_max <= 2000, 'Modifier exceeds 20%');
+
+            self.target_monthly_revenue.write(target_monthly_revenue);
+            self.revenue_burn_modifier_max.write(modifier_max);
+            self.revenue_burn_enabled.write(enabled);
+
+            self.emit(Event::RevenueBurnConfigUpdated(RevenueBurnConfigUpdated {
+                updated_by: get_caller_address(),
+                target_monthly_revenue,
+                modifier_max,
+                enabled,
+                timestamp: get_block_timestamp(),
+            }));
+        }
+
+        fn get_revenue_burn_config(self: @ContractState) -> (u256, u32, bool, i32) {
+            (
+                self.target_monthly_revenue.read(),
+                self.revenue_burn_modifier_max.read(),
+                self.revenue_burn_enabled.read(),
+                self.last_revenue_burn_adjustment.read()
+            )
+        }
+
+        fn get_effective_burn_rate(self: @ContractState) -> (u32, u32, i32) {
+            let effective_rate = self._get_current_burn_rate();
+            let base_rate = self._get_base_burn_rate();
+            let adjustment = self.last_revenue_burn_adjustment.read();
+            (effective_rate, base_rate, adjustment)
+        }
+
+        // Phase 3.6: Supply cap view functions
+
+        fn get_max_supply(self: @ContractState) -> u256 {
+            MAX_SUPPLY
+        }
+
+        fn get_remaining_mintable(self: @ContractState) -> u256 {
+            let current_supply = self.total_supply.read();
+            if current_supply >= MAX_SUPPLY {
+                0
+            } else {
+                MAX_SUPPLY - current_supply
+            }
+        }
+
+        fn get_supply_utilization(self: @ContractState) -> u32 {
+            let current_supply = self.total_supply.read();
+            let percentage: u256 = (current_supply * 10000) / MAX_SUPPLY;
+            percentage.try_into().unwrap_or(10000)
+        }
+
+        // Phase 3.7: Token flow reconciliation functions
+
+        fn take_token_flow_snapshot(ref self: ContractState) -> u256 {
+            let snapshot_id = self.snapshot_count.read();
+            let current_time = get_block_timestamp();
+
+            // Require at least 1 hour between snapshots to prevent spam
+            let last_snapshot = self.last_snapshot_time.read();
+            assert(current_time - last_snapshot >= 3600, 'Snapshot too soon');
+
+            // Collect all metrics
+            let total_supply = self.total_supply.read();
+            let total_burned = self.total_burned.read();
+            let total_minted = self.total_minted.read();
+            let total_revenue = self.total_revenue_collected.read();
+            let monthly_revenue = self._get_monthly_revenue();
+            let burn_rate_bps = self._get_current_burn_rate();
+            let inflation_rate_bps = self._get_current_inflation_rate();
+            let supply_utilization_bps = self.get_supply_utilization();
+
+            // Emit snapshot event
+            self.emit(Event::TokenFlowSnapshot(TokenFlowSnapshot {
+                snapshot_id,
+                total_supply,
+                total_burned,
+                total_minted,
+                total_revenue,
+                monthly_revenue,
+                burn_rate_bps,
+                inflation_rate_bps,
+                supply_utilization_bps,
+                timestamp: current_time,
+            }));
+
+            // Update tracking
+            self.snapshot_count.write(snapshot_id + 1);
+            self.last_snapshot_time.write(current_time);
+
+            snapshot_id
+        }
+
+        fn get_token_flow_summary(self: @ContractState) -> (u256, u256, u256, bool) {
+            let total_minted = self.total_minted.read();
+            let total_burned = self.total_burned.read();
+
+            // Calculate net change and direction
+            let (net_change_abs, is_deflationary) = if total_burned >= total_minted {
+                (total_burned - total_minted, true)
+            } else {
+                (total_minted - total_burned, false)
+            };
+
+            (total_minted, total_burned, net_change_abs, is_deflationary)
+        }
+
+        fn get_milestone_status(self: @ContractState) -> (bool, bool, bool, bool, bool) {
+            (
+                self.milestone_burn_10pct.read(),
+                self.milestone_burn_25pct.read(),
+                self.milestone_burn_50pct.read(),
+                self.milestone_revenue_1m.read(),
+                self.milestone_revenue_10m.read()
+            )
+        }
+
+        // ====================================================================
+        // UPGRADABILITY FUNCTIONS - Timelock-protected contract upgrades
+        // ====================================================================
+
+        /// Schedule a contract upgrade with timelock delay
+        /// Can only be called by emergency council/owner
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_emergency_council();
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            // Ensure no upgrade is already pending
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending == zero_hash, 'Upgrade already pending');
+
+            // Schedule the upgrade
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(Event::UpgradeScheduled(UpgradeScheduled {
+                new_class_hash,
+                scheduled_by: get_caller_address(),
+                execute_after,
+                timestamp: now,
+            }));
+        }
+
+        /// Execute a scheduled upgrade after timelock has passed
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_emergency_council();
+
+            let now = get_block_timestamp();
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+
+            // Verify there's a pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending != zero_hash, 'No pending upgrade');
+
+            // Verify timelock has passed
+            assert(now >= scheduled_at + delay, 'Timelock not expired');
+
+            // Get current class hash for event (using syscall)
+            let old_class_hash = starknet::syscalls::get_class_hash_at_syscall(
+                starknet::get_contract_address()
+            ).unwrap_syscall();
+
+            // Clear pending upgrade state
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Emit event before upgrade
+            self.emit(Event::UpgradeExecuted(UpgradeExecuted {
+                old_class_hash,
+                new_class_hash: pending,
+                executed_by: get_caller_address(),
+                timestamp: now,
+            }));
+
+            // Execute the upgrade using replace_class syscall
+            starknet::syscalls::replace_class_syscall(pending).unwrap_syscall();
+        }
+
+        /// Cancel a scheduled upgrade before it's executed
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_emergency_council();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+
+            // Verify there's a pending upgrade to cancel
+            assert(pending != zero_hash, 'No pending upgrade');
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(Event::UpgradeCancelled(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_by: get_caller_address(),
+                timestamp: get_block_timestamp(),
+            }));
+        }
+
+        /// Get upgrade governance info
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64, u64) {
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let execute_after = if scheduled_at > 0 { scheduled_at + delay } else { 0 };
+
+            (pending, scheduled_at, execute_after, delay)
+        }
+
+        /// Set the upgrade timelock delay (owner only)
+        fn set_upgrade_delay(ref self: ContractState, new_delay: u64) {
+            self._only_emergency_council();
+
+            // Minimum 24 hours, maximum 7 days
+            assert(new_delay >= 86400, 'Delay must be >= 24h');
+            assert(new_delay <= 604800, 'Delay must be <= 7 days');
+
+            self.upgrade_delay.write(new_delay);
+        }
+
+        // ====================================================================
+        // EMISSION SCHEDULE FUNCTIONS - Deflationary tokenomics model
+        // ====================================================================
+
+        /// Emit ecosystem rewards for the current month
+        /// Can be called once per month, emits based on decay schedule
+        /// Year 1: 3%, Year 2: 2.5%, Year 3: 2%, Year 4: 1.5%, Year 5: 1%
+        fn emit_ecosystem_rewards(ref self: ContractState, recipient: ContractAddress) {
+            self._only_authorized();
+            self._not_paused();
+
+            let now = get_block_timestamp();
+            let last_emission = self.last_ecosystem_emission.read();
+            let current_month = self.ecosystem_emission_month.read();
+
+            // Ensure at least 30 days since last emission (with 1 hour buffer)
+            assert(now >= last_emission + SECONDS_PER_MONTH - 3600, 'Too soon for emission');
+
+            // Check if emission schedule is complete (60 months)
+            assert(current_month < 60, 'Emission schedule complete');
+
+            // Get remaining pool balance
+            let remaining = self.pool_ecosystem_remaining.read();
+            assert(remaining > 0, 'Ecosystem pool depleted');
+
+            // Calculate emission rate based on year
+            let year = (current_month / 12) + 1;
+            let rate_bps = self._get_emission_rate_for_year(year);
+
+            // Calculate emission amount (rate is applied to remaining pool)
+            let emission_amount = (remaining * rate_bps.into()) / 10000;
+
+            // Ensure we don't emit more than remaining
+            let actual_emission = if emission_amount > remaining {
+                remaining
+            } else {
+                emission_amount
+            };
+
+            // Update pool tracking
+            self.pool_ecosystem_remaining.write(remaining - actual_emission);
+            let total_emitted = self.pool_ecosystem_emitted.read();
+            self.pool_ecosystem_emitted.write(total_emitted + actual_emission);
+
+            // Update timing
+            self.last_ecosystem_emission.write(now);
+            self.ecosystem_emission_month.write(current_month + 1);
+
+            // Mint the emission to recipient
+            let current_supply = self.total_supply.read();
+            self.total_supply.write(current_supply + actual_emission);
+            let recipient_balance = self.balances.read(recipient);
+            self.balances.write(recipient, recipient_balance + actual_emission);
+
+            // Track total minted
+            let total_minted = self.total_minted.read();
+            self.total_minted.write(total_minted + actual_emission);
+
+            // Emit events
+            self.emit(Event::EcosystemEmission(EcosystemEmission {
+                month: current_month + 1,
+                amount: actual_emission,
+                remaining_pool: remaining - actual_emission,
+                emission_rate_bps: rate_bps,
+                timestamp: now,
+            }));
+
+            self.emit(Transfer {
+                from: 0.try_into().unwrap(),
+                to: recipient,
+                value: actual_emission,
+            });
+        }
+
+        /// Get current ecosystem emission status
+        fn get_ecosystem_emission_status(self: @ContractState) -> (u256, u256, u32, u64, u32) {
+            let remaining = self.pool_ecosystem_remaining.read();
+            let emitted = self.pool_ecosystem_emitted.read();
+            let month = self.ecosystem_emission_month.read();
+            let last_emission = self.last_ecosystem_emission.read();
+            let year = if month >= 60 { 5 } else { (month / 12) + 1 };
+            let rate = self._get_emission_rate_for_year(year);
+
+            (remaining, emitted, month, last_emission, rate)
+        }
+
+        /// Get all pool balances
+        fn get_pool_balances(self: @ContractState) -> (u256, u256, u256, u256, u256, u256, u256, u256, u256) {
+            (
+                self.pool_ecosystem_remaining.read(),
+                self.pool_treasury_remaining.read(),
+                self.pool_team_remaining.read(),
+                self.pool_public_sale_remaining.read(),
+                self.pool_pre_seed_remaining.read(),
+                self.pool_seed_remaining.read(),
+                self.pool_strategic_remaining.read(),
+                self.pool_advisors_remaining.read(),
+                self.pool_code_dev_remaining.read()
+            )
+        }
+
+        // ====================================================================
+        // VESTING RELEASE FUNCTIONS - Linear vesting with cliffs
+        // ====================================================================
+
+        /// Release vested treasury tokens (linear over 48 months)
+        fn release_treasury_vesting(ref self: ContractState) {
+            self._only_authorized();
+            self._not_paused();
+
+            let now = get_block_timestamp();
+            let launch = self.launch_timestamp.read();
+            let months_elapsed = (now - launch) / SECONDS_PER_MONTH;
+
+            // Treasury: Linear over 48 months
+            let vesting_months: u64 = VEST_TREASURY_MONTHS.into();
+            let months_vested = if months_elapsed > vesting_months { vesting_months } else { months_elapsed };
+
+            // Calculate vested amount
+            let total_allocation = ALLOC_TREASURY;
+            let vested_amount = (total_allocation * months_vested.into()) / vesting_months.into();
+            let already_released = self.pool_treasury_released.read();
+            let releasable = if vested_amount > already_released { vested_amount - already_released } else { 0 };
+
+            assert(releasable > 0, 'Nothing to release');
+
+            let remaining = self.pool_treasury_remaining.read();
+            let actual_release = if releasable > remaining { remaining } else { releasable };
+
+            // Update pool tracking
+            self.pool_treasury_remaining.write(remaining - actual_release);
+            self.pool_treasury_released.write(already_released + actual_release);
+
+            // Mint to beneficiary
+            let beneficiary = self.treasury_beneficiary.read();
+            self._mint_vesting(beneficiary, actual_release, 'treasury');
+
+            self.emit(Event::VestingReleased(VestingReleased {
+                pool_name: 'treasury',
+                beneficiary,
+                amount: actual_release,
+                total_released: already_released + actual_release,
+                remaining: remaining - actual_release,
+                timestamp: now,
+            }));
+        }
+
+        /// Release vested team tokens (12 month cliff, then linear over 36 months)
+        fn release_team_vesting(ref self: ContractState) {
+            self._only_authorized();
+            self._not_paused();
+
+            let now = get_block_timestamp();
+            let launch = self.launch_timestamp.read();
+            let months_elapsed = (now - launch) / SECONDS_PER_MONTH;
+
+            // Team: 12 month cliff
+            let cliff_months: u64 = VEST_TEAM_CLIFF.into();
+            assert(months_elapsed >= cliff_months, 'Cliff not reached');
+
+            // After cliff: linear over remaining 36 months
+            let total_vesting_months: u64 = VEST_TEAM_MONTHS.into();
+            let post_cliff_months = months_elapsed - cliff_months;
+            let linear_months: u64 = total_vesting_months - cliff_months;
+            let months_vested = if post_cliff_months > linear_months { linear_months } else { post_cliff_months };
+
+            // Calculate vested amount
+            let total_allocation = ALLOC_TEAM;
+            let vested_amount = (total_allocation * months_vested.into()) / linear_months.into();
+            let already_released = self.pool_team_released.read();
+            let releasable = if vested_amount > already_released { vested_amount - already_released } else { 0 };
+
+            assert(releasable > 0, 'Nothing to release');
+
+            let remaining = self.pool_team_remaining.read();
+            let actual_release = if releasable > remaining { remaining } else { releasable };
+
+            // Update pool tracking
+            self.pool_team_remaining.write(remaining - actual_release);
+            self.pool_team_released.write(already_released + actual_release);
+
+            // Mint to beneficiary
+            let beneficiary = self.team_beneficiary.read();
+            self._mint_vesting(beneficiary, actual_release, 'team');
+
+            self.emit(Event::VestingReleased(VestingReleased {
+                pool_name: 'team',
+                beneficiary,
+                amount: actual_release,
+                total_released: already_released + actual_release,
+                remaining: remaining - actual_release,
+                timestamp: now,
+            }));
+        }
+
+        /// Release vested public sale tokens (remaining 40M linear over 12 months)
+        fn release_public_sale_vesting(ref self: ContractState, beneficiary: ContractAddress) {
+            self._only_authorized();
+            self._not_paused();
+
+            let now = get_block_timestamp();
+            let launch = self.launch_timestamp.read();
+            let months_elapsed = (now - launch) / SECONDS_PER_MONTH;
+
+            // Public Sale: Linear over 12 months
+            let vesting_months: u64 = VEST_PUBLIC_SALE_MONTHS.into();
+            let months_vested = if months_elapsed > vesting_months { vesting_months } else { months_elapsed };
+
+            // Remaining public sale after TGE (40M)
+            let total_allocation = ALLOC_PUBLIC_SALE - TGE_PUBLIC_SALE;
+            let vested_amount = (total_allocation * months_vested.into()) / vesting_months.into();
+
+            // Use pool_public_sale_remaining as both tracker and limiter
+            let remaining = self.pool_public_sale_remaining.read();
+            let already_released = total_allocation - remaining;
+            let releasable = if vested_amount > already_released { vested_amount - already_released } else { 0 };
+
+            assert(releasable > 0, 'Nothing to release');
+
+            let actual_release = if releasable > remaining { remaining } else { releasable };
+
+            // Update pool tracking
+            self.pool_public_sale_remaining.write(remaining - actual_release);
+
+            // Mint to beneficiary
+            self._mint_vesting(beneficiary, actual_release, 'public_sale');
+
+            self.emit(Event::VestingReleased(VestingReleased {
+                pool_name: 'public_sale',
+                beneficiary,
+                amount: actual_release,
+                total_released: already_released + actual_release,
+                remaining: remaining - actual_release,
+                timestamp: now,
+            }));
+        }
+
+        /// Get vesting status for all pools
+        /// Returns: (treasury_vested_pct, team_vested_pct, team_cliff_passed, public_sale_vested_pct)
+        fn get_vesting_status(self: @ContractState) -> (u32, u32, bool, u32) {
+            let now = get_block_timestamp();
+            let launch = self.launch_timestamp.read();
+            let months_elapsed = (now - launch) / SECONDS_PER_MONTH;
+
+            // Treasury vesting progress (48 months)
+            let treasury_vesting_months: u64 = VEST_TREASURY_MONTHS.into();
+            let treasury_pct = if months_elapsed >= treasury_vesting_months {
+                10000_u32 // 100%
+            } else {
+                ((months_elapsed * 10000) / treasury_vesting_months).try_into().unwrap_or(0)
+            };
+
+            // Team vesting progress (12 cliff + 36 linear)
+            let team_cliff: u64 = VEST_TEAM_CLIFF.into();
+            let team_cliff_passed = months_elapsed >= team_cliff;
+            let team_total: u64 = VEST_TEAM_MONTHS.into();
+            let team_pct = if !team_cliff_passed {
+                0_u32
+            } else if months_elapsed >= team_total {
+                10000_u32
+            } else {
+                let post_cliff = months_elapsed - team_cliff;
+                let linear = team_total - team_cliff;
+                ((post_cliff * 10000) / linear).try_into().unwrap_or(0)
+            };
+
+            // Public sale vesting progress (12 months)
+            let public_vesting_months: u64 = VEST_PUBLIC_SALE_MONTHS.into();
+            let public_pct = if months_elapsed >= public_vesting_months {
+                10000_u32
+            } else {
+                ((months_elapsed * 10000) / public_vesting_months).try_into().unwrap_or(0)
+            };
+
+            (treasury_pct, team_pct, team_cliff_passed, public_pct)
+        }
     }
 
     /// Internal Implementation Functions
@@ -1545,8 +2354,46 @@ pub mod SAGEToken {
         }
 
         fn _check_inflation_limits(self: @ContractState, amount: u256) {
-            // Implement inflation rate checking logic here
-            // This would verify that the mint amount doesn't exceed governance-set limits
+            // Get current supply and max inflation rate
+            let current_supply = self.total_supply.read();
+            let _max_inflation_rate = self.max_inflation_rate.read(); // Used for future rate comparisons
+
+            // Calculate maximum allowed mint based on current inflation rate
+            // Inflation rate is in basis points (100 = 1%)
+            // Annual inflation cap, but we check per-mint
+            let current_inflation_rate = self._get_current_inflation_rate();
+
+            // Maximum yearly mint = supply * inflation_rate / 10000
+            // For per-mint check, we allow up to 1% of yearly max per transaction
+            let yearly_max_mint = (current_supply * current_inflation_rate.into()) / 10000;
+            let per_tx_max = yearly_max_mint / 100; // 1% of yearly max per tx
+
+            // Enforce the limit - mint amount must not exceed per-tx maximum
+            assert(
+                amount <= per_tx_max || per_tx_max == 0,
+                'Exceeds inflation limit'
+            );
+
+            // Additional check: total supply after mint must not exceed hard cap
+            // Hard cap is 10x initial supply (10B tokens)
+            let hard_cap: u256 = TOTAL_SUPPLY * 10;
+            let new_supply = current_supply + amount;
+            assert(new_supply <= hard_cap, 'Exceeds hard supply cap');
+
+            // Rate limiting: check monthly adjustment limits
+            let (_can_adjust, _, _) = self.check_inflation_adjustment_rate_limit();
+            // Note: This check is informational - actual enforcement happens in governance
+
+            // Check guard band if active
+            if self.guard_band_active.read() {
+                // Guard band adds extra 3% buffer for inflation control
+                let guard_band_max = (yearly_max_mint * (10000 + GUARD_BAND_INFLATION.into())) / 10000;
+                let per_tx_with_guard = guard_band_max / 100;
+                assert(
+                    amount <= per_tx_with_guard,
+                    'Guard band limit exceeded'
+                );
+            }
         }
 
         fn _calculate_voting_power(self: @ContractState, account: ContractAddress) -> u256 {
@@ -1639,7 +2486,76 @@ pub mod SAGEToken {
             let launch_time = self.launch_timestamp.read();
             let current_time = get_block_timestamp();
             let months_since_launch = (current_time - launch_time) / (30 * 24 * 3600); // Approximate months
-            
+
+            // Phase 3: Get time-based base rate
+            let base_rate: u32 = if months_since_launch <= 12 {
+                3000 // 30%
+            } else if months_since_launch <= 36 {
+                5000 // 50%
+            } else if months_since_launch <= 60 {
+                7000 // 70%
+            } else {
+                8000 // 80%
+            };
+
+            // Phase 3: Apply revenue-based modifier if enabled
+            if !self.revenue_burn_enabled.read() {
+                return base_rate;
+            }
+
+            let monthly_revenue = self._get_monthly_revenue();
+            let target_revenue = self.target_monthly_revenue.read();
+            let modifier_max = self.revenue_burn_modifier_max.read();
+
+            // Skip adjustment if no target set
+            if target_revenue == 0 {
+                return base_rate;
+            }
+
+            // Calculate revenue ratio and apply modifier
+            // Revenue >= target: increase burn rate (we're doing well, burn more)
+            // Revenue < target: decrease burn rate (preserve liquidity)
+            let effective_rate = if monthly_revenue >= target_revenue {
+                // Strong revenue: increase burn rate
+                // Modifier scales with how much we exceed target (capped at 2x target)
+                let excess_ratio = if monthly_revenue > target_revenue * 2 {
+                    2_u256 // Cap at 2x
+                } else {
+                    monthly_revenue / target_revenue
+                };
+                // Scale modifier: at 2x target, use full modifier_max
+                let modifier: u32 = ((excess_ratio - 1) * modifier_max.into() / 1).try_into().unwrap_or(modifier_max);
+                let capped_modifier = if modifier > modifier_max { modifier_max } else { modifier };
+                // Cap effective rate at 9500 (95%) to maintain minimum liquidity
+                let new_rate = base_rate + capped_modifier;
+                if new_rate > 9500 { 9500 } else { new_rate }
+            } else {
+                // Weak revenue: decrease burn rate
+                // Modifier scales with how far below target we are
+                let deficit_ratio_bps: u256 = ((target_revenue - monthly_revenue) * 10000) / target_revenue;
+                // Max reduction is half of modifier_max (don't reduce too aggressively)
+                let max_reduction = modifier_max / 2;
+                let modifier: u32 = ((deficit_ratio_bps * max_reduction.into()) / 10000).try_into().unwrap_or(max_reduction);
+                let capped_modifier = if modifier > max_reduction { max_reduction } else { modifier };
+                // Floor at 500 (5%) to ensure some burning always occurs
+                if base_rate > capped_modifier && (base_rate - capped_modifier) >= 500 {
+                    base_rate - capped_modifier
+                } else if base_rate > 500 {
+                    500
+                } else {
+                    base_rate // Don't go below base if already low
+                }
+            };
+
+            effective_rate
+        }
+
+        /// Phase 3: Get base burn rate without revenue adjustment (for reporting)
+        fn _get_base_burn_rate(self: @ContractState) -> u32 {
+            let launch_time = self.launch_timestamp.read();
+            let current_time = get_block_timestamp();
+            let months_since_launch = (current_time - launch_time) / (30 * 24 * 3600);
+
             if months_since_launch <= 12 {
                 3000 // 30%
             } else if months_since_launch <= 36 {
@@ -1669,12 +2585,13 @@ pub mod SAGEToken {
 
         fn _update_revenue_tracking(ref self: ContractState, revenue_amount: u256) {
             let current_total = self.total_revenue_collected.read();
-            self.total_revenue_collected.write(current_total + revenue_amount);
-            
+            let new_total = current_total + revenue_amount;
+            self.total_revenue_collected.write(new_total);
+
             // Reset monthly revenue if needed
             let last_reset = self.last_revenue_reset.read();
             let current_time = get_block_timestamp();
-            
+
             if current_time - last_reset > (30 * 24 * 3600) { // 30 days
                 self.monthly_revenue.write(revenue_amount);
                 self.last_revenue_reset.write(current_time);
@@ -1682,6 +2599,9 @@ pub mod SAGEToken {
                 let current_monthly = self.monthly_revenue.read();
                 self.monthly_revenue.write(current_monthly + revenue_amount);
             }
+
+            // Phase 3.7: Check revenue milestones
+            self._check_revenue_milestones(new_total);
         }
 
         fn _get_monthly_revenue(self: @ContractState) -> u256 {
@@ -1700,8 +2620,115 @@ pub mod SAGEToken {
             // This could be enhanced with more sophisticated metrics
             let total_burned = self.total_burned.read();
             let total_supply = TOTAL_SUPPLY;
-            
+
             ((total_burned * 10000) / total_supply).try_into().unwrap_or(0)
+        }
+
+        /// Get emission rate for a given year (1-5)
+        /// Returns rate in basis points
+        fn _get_emission_rate_for_year(self: @ContractState, year: u32) -> u32 {
+            match year {
+                1 => EMISSION_RATE_YEAR_1,  // 3.0% = 300 bps
+                2 => EMISSION_RATE_YEAR_2,  // 2.5% = 250 bps
+                3 => EMISSION_RATE_YEAR_3,  // 2.0% = 200 bps
+                4 => EMISSION_RATE_YEAR_4,  // 1.5% = 150 bps
+                5 => EMISSION_RATE_YEAR_5,  // 1.0% = 100 bps
+                _ => EMISSION_RATE_YEAR_5,  // Default to lowest rate after year 5
+            }
+        }
+
+        /// Internal function to mint vesting tokens
+        fn _mint_vesting(ref self: ContractState, to: ContractAddress, amount: u256, reason: felt252) {
+            // Update supply
+            let current_supply = self.total_supply.read();
+            let new_supply = current_supply + amount;
+
+            // Enforce max supply
+            assert(new_supply <= MAX_SUPPLY, 'Exceeds max supply');
+
+            self.total_supply.write(new_supply);
+
+            // Update recipient balance
+            let recipient_balance = self.balances.read(to);
+            self.balances.write(to, recipient_balance + amount);
+
+            // Track total minted
+            let total_minted = self.total_minted.read();
+            self.total_minted.write(total_minted + amount);
+
+            // Emit events
+            self.emit(Mint { to, amount, reason });
+            self.emit(Transfer {
+                from: 0.try_into().unwrap(),
+                to,
+                value: amount,
+            });
+        }
+
+        /// Phase 3.7: Check and emit burn milestones
+        fn _check_burn_milestones(ref self: ContractState, new_total_burned: u256) {
+            let initial_supply = TOTAL_SUPPLY;
+            let now = get_block_timestamp();
+
+            // 10% milestone: 100M tokens burned
+            let threshold_10pct = initial_supply / 10;
+            if !self.milestone_burn_10pct.read() && new_total_burned >= threshold_10pct {
+                self.milestone_burn_10pct.write(true);
+                self.emit(Event::MilestoneReached(MilestoneReached {
+                    milestone_type: 'burn_10pct',
+                    value: new_total_burned,
+                    timestamp: now,
+                }));
+            }
+
+            // 25% milestone: 250M tokens burned
+            let threshold_25pct = initial_supply / 4;
+            if !self.milestone_burn_25pct.read() && new_total_burned >= threshold_25pct {
+                self.milestone_burn_25pct.write(true);
+                self.emit(Event::MilestoneReached(MilestoneReached {
+                    milestone_type: 'burn_25pct',
+                    value: new_total_burned,
+                    timestamp: now,
+                }));
+            }
+
+            // 50% milestone: 500M tokens burned
+            let threshold_50pct = initial_supply / 2;
+            if !self.milestone_burn_50pct.read() && new_total_burned >= threshold_50pct {
+                self.milestone_burn_50pct.write(true);
+                self.emit(Event::MilestoneReached(MilestoneReached {
+                    milestone_type: 'burn_50pct',
+                    value: new_total_burned,
+                    timestamp: now,
+                }));
+            }
+        }
+
+        /// Phase 3.7: Check and emit revenue milestones
+        fn _check_revenue_milestones(ref self: ContractState, new_total_revenue: u256) {
+            let now = get_block_timestamp();
+
+            // 1M SAGE milestone (with 18 decimals)
+            let threshold_1m: u256 = 1_000_000_000_000_000_000_000_000; // 1M SAGE
+            if !self.milestone_revenue_1m.read() && new_total_revenue >= threshold_1m {
+                self.milestone_revenue_1m.write(true);
+                self.emit(Event::MilestoneReached(MilestoneReached {
+                    milestone_type: 'revenue_1m',
+                    value: new_total_revenue,
+                    timestamp: now,
+                }));
+            }
+
+            // 10M SAGE milestone (with 18 decimals)
+            let threshold_10m: u256 = 10_000_000_000_000_000_000_000_000; // 10M SAGE
+            if !self.milestone_revenue_10m.read() && new_total_revenue >= threshold_10m {
+                self.milestone_revenue_10m.write(true);
+                self.emit(Event::MilestoneReached(MilestoneReached {
+                    milestone_type: 'revenue_10m',
+                    value: new_total_revenue,
+                    timestamp: now,
+                }));
+            }
         }
 
         fn _initialize_security_defaults(ref self: ContractState) {

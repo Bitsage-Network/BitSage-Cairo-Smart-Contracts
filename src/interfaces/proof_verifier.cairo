@@ -3,7 +3,6 @@
 //! Critical component for positioning SAGE as blockchain scaling infrastructure
 
 use core::array::Array;
-use core::serde::Serde;
 pub use super::job_manager::{WorkerId};
 
 // ZK Proof specific identifiers

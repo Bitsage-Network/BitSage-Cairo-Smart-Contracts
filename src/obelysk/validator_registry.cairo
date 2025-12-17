@@ -178,7 +178,7 @@ pub trait IValidatorRegistry<TContractState> {
 mod ValidatorRegistry {
     use super::{
         IValidatorRegistry, ValidatorStatus, ValidatorInfo, ValidatorSet, ValidatorStats,
-        MAX_VALIDATORS, MIN_VALIDATOR_STAKE,
+        MIN_VALIDATOR_STAKE,
     };
     use starknet::{
         ContractAddress, get_caller_address,

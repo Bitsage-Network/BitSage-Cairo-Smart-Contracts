@@ -111,11 +111,42 @@ pub trait IReputationManager<TContractState> {
     /// @param count: Number of workers to return
     /// @return: Array of top workers
     fn get_top_workers(self: @TContractState, count: u32) -> Array<WorkerRank>;
-    
+
     /// Get workers within a reputation level
     /// @param level: Reputation level (1-5)
     /// @return: Array of workers in that level
     fn get_workers_by_level(self: @TContractState, level: u8) -> Array<WorkerRank>;
+
+    // ============================================================================
+    // Phase 2.1: Paginated Query Functions
+    // ============================================================================
+
+    /// Get top workers with pagination support
+    /// @param offset: Starting index (0-based)
+    /// @param limit: Maximum number of workers to return
+    /// @return: Array of top workers in the specified range
+    fn get_top_workers_paginated(
+        self: @TContractState,
+        offset: u32,
+        limit: u32
+    ) -> Array<WorkerRank>;
+
+    /// Get workers by level with pagination support
+    /// @param level: Reputation level (1-5)
+    /// @param offset: Starting index (0-based)
+    /// @param limit: Maximum number of workers to return
+    /// @return: Array of workers in the specified level and range
+    fn get_workers_by_level_paginated(
+        self: @TContractState,
+        level: u8,
+        offset: u32,
+        limit: u32
+    ) -> Array<WorkerRank>;
+
+    /// Get total count of workers at a specific level (useful for pagination)
+    /// @param level: Reputation level (1-5)
+    /// @return: Total count of workers at that level
+    fn get_workers_count_by_level(self: @TContractState, level: u8) -> u32;
     
     /// Apply reputation decay for inactive workers
     /// @param cutoff_timestamp: Workers inactive since this time will have decay applied

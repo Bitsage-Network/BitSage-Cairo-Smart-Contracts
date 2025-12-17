@@ -248,7 +248,7 @@ mod Gamification {
             let final_xp: u64 = ((base_xp * difficulty_mult * streak_bonus) / 10000).try_into().unwrap();
             
             // Add XP
-            let old_xp = profile.xp;
+            let _old_xp = profile.xp;
             profile.xp += final_xp;
             profile.last_active = get_block_timestamp();
             

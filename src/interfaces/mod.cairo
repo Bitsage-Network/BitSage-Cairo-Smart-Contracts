@@ -6,6 +6,8 @@ pub mod cdc_pool;
 pub mod paymaster;
 pub mod sage_token;
 pub mod reputation_manager;
+pub mod proof_verifier;
+pub mod proof_router;
 
 // Re-export commonly used types from job_manager
 pub use job_manager::{IJobManager, JobId, ModelId, WorkerId, JobStatus, JobSpec, JobResult, ModelRequirements};
@@ -28,5 +30,5 @@ pub use sage_token::{
 
 // Re-export commonly used types from reputation_manager
 pub use reputation_manager::{
-    IReputationManager, ReputationScore, ReputationEvent, ReputationReason, ReputationThreshold
+    IReputationManager, ReputationScore, ReputationEvent, ReputationReason, ReputationThreshold, WorkerRank
 }; 

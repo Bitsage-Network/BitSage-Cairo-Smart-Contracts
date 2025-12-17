@@ -20,10 +20,10 @@
 use starknet::ContractAddress;
 
 /// GPU tier for staking requirements
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum GpuTier {
     /// Consumer GPUs (RTX 30xx, 40xx)
+    #[default]
     Consumer,
     /// Workstation GPUs (RTX A6000, L40S)
     Workstation,
@@ -36,10 +36,10 @@ pub enum GpuTier {
 }
 
 /// Slashing reason
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum SlashReason {
     /// Proof failed verification
+    #[default]
     InvalidProof,
     /// Job timed out
     Timeout,
@@ -52,7 +52,7 @@ pub enum SlashReason {
 }
 
 /// Worker stake information
-#[derive(Copy, Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde, starknet::Store, Default)]
 pub struct WorkerStake {
     /// Total staked amount
     pub amount: u256,
@@ -139,10 +139,19 @@ pub trait IProverStaking<TContractState> {
     
     /// Update staking configuration (admin only)
     fn update_config(ref self: TContractState, config: StakingConfig);
-    
+
+    /// Set OptimisticTEE contract (admin only)
+    fn set_optimistic_tee(ref self: TContractState, tee: ContractAddress);
+
+    /// Set verifier contract (admin only)
+    fn set_verifier(ref self: TContractState, verifier: ContractAddress);
+
+    /// Set job manager contract (admin only)
+    fn set_job_manager(ref self: TContractState, job_manager: ContractAddress);
+
     /// Get total staked amount
     fn total_staked(self: @TContractState) -> u256;
-    
+
     /// Get total slashed amount
     fn total_slashed(self: @TContractState) -> u256;
 }
@@ -174,6 +183,8 @@ mod ProverStaking {
         verifier: ContractAddress,
         /// Job manager contract (can record success)
         job_manager: ContractAddress,
+        /// Optimistic TEE contract (can call slash on challenge success)
+        optimistic_tee: ContractAddress,
         /// Staking configuration
         config: StakingConfig,
         /// Worker stakes
@@ -427,10 +438,13 @@ mod ProverStaking {
             reason: SlashReason,
             job_id: felt252,
         ) {
-            // Only verifier or job manager can slash
+            // Only verifier, job manager, or optimistic_tee can slash
             let caller = get_caller_address();
             assert!(
-                caller == self.verifier.read() || caller == self.job_manager.read() || caller == self.owner.read(),
+                caller == self.verifier.read()
+                    || caller == self.job_manager.read()
+                    || caller == self.optimistic_tee.read()
+                    || caller == self.owner.read(),
                 "Unauthorized"
             );
             
@@ -524,11 +538,29 @@ mod ProverStaking {
         fn update_config(ref self: ContractState, config: StakingConfig) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
             self.config.write(config);
-            
+
             self.emit(ConfigUpdated {
                 min_stake_consumer: config.min_stake_consumer,
                 reward_apy_bps: config.reward_apy_bps,
             });
+        }
+
+        /// Set OptimisticTEE contract address (admin only)
+        fn set_optimistic_tee(ref self: ContractState, tee: ContractAddress) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            self.optimistic_tee.write(tee);
+        }
+
+        /// Set verifier contract address (admin only)
+        fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            self.verifier.write(verifier);
+        }
+
+        /// Set job manager contract address (admin only)
+        fn set_job_manager(ref self: ContractState, job_manager: ContractAddress) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            self.job_manager.write(job_manager);
         }
 
         fn total_staked(self: @ContractState) -> u256 {

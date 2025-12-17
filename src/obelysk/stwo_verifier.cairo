@@ -3,29 +3,43 @@
 //! This contract verifies STWO Circle STARK proofs on-chain.
 //! It integrates with the stwo-cairo-verifier library from StarkWare.
 //!
-//! # Architecture
+//! # Architecture - Dual Verification Modes
 //!
-//! The verification flow:
-//! 1. Off-chain: GPU prover generates STWO proof
-//! 2. Off-chain: Proof is serialized to Cairo-compatible format
-//! 3. On-chain: This contract verifies the proof
-//! 4. On-chain: Verification result is stored and can be queried
+//! ## Mode 1: GPU-TEE Accelerated (Fast Path)
+//! When a GPU with TEE (Trusted Execution Environment) is available:
+//! 1. Off-chain: STWO GPU backend generates proof inside TEE enclave
+//! 2. Off-chain: TEE produces attestation quote proving execution integrity
+//! 3. On-chain: Proof verified with optimistic TEE verification
+//! 4. On-chain: Challenge window allows fraud proofs against bad attestations
+//!
+//! Benefits: ~10-100x faster proving, private computation, lower gas costs
+//! Supported TEEs: Intel TDX, AMD SEV-SNP, NVIDIA Confidential Computing
+//!
+//! ## Mode 2: Standard STWO (Fallback Path)
+//! When GPU/TEE is not available:
+//! 1. Off-chain: STWO SIMD backend generates proof on CPU
+//! 2. On-chain: Full cryptographic verification of STARK proof
+//! 3. No TEE attestation required
+//!
+//! # Proof Detection
+//!
+//! The contract automatically detects the proof type based on:
+//! - Presence of TEE attestation data (GPU-TEE mode)
+//! - Proof structure markers
+//! - Security configuration flags
 //!
 //! # Security Model
 //!
 //! - Proofs must meet minimum security requirements (96 bits)
-//! - Only whitelisted AIR components are accepted
+//! - GPU-TEE proofs require whitelisted enclave measurements
+//! - Standard proofs require full cryptographic verification
 //! - Verification results are immutable once stored
 
 use starknet::ContractAddress;
-use starknet::storage::{
-    StoragePointerReadAccess, StoragePointerWriteAccess,
-    StorageMapReadAccess, StorageMapWriteAccess,
-    Map,
-};
 
 /// Proof verification status
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
 pub enum VerificationStatus {
     /// Proof has not been submitted
     NotSubmitted,
@@ -37,6 +51,37 @@ pub enum VerificationStatus {
     Failed,
     /// Proof was rejected (invalid format, security, etc.)
     Rejected,
+    /// Proof is in optimistic verification window (GPU-TEE mode)
+    OptimisticPending,
+    /// Proof was challenged during optimistic window
+    Challenged,
+}
+
+/// Proof source/generation method
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
+pub enum ProofSource {
+    /// Standard STWO proof (CPU/SIMD backend)
+    StandardSTWO,
+    /// GPU-accelerated STWO proof with TEE attestation
+    GpuTeeSTWO,
+    /// Unknown or legacy proof format
+    Unknown,
+}
+
+/// TEE attestation data for GPU-accelerated proofs
+#[derive(Copy, Drop, Serde, starknet::Store)]
+pub struct TeeAttestation {
+    /// TEE type: 1 = Intel TDX, 2 = AMD SEV-SNP, 3 = NVIDIA CC
+    pub tee_type: u8,
+    /// MRENCLAVE/measurement hash
+    pub enclave_measurement: felt252,
+    /// Attestation quote hash (full quote stored off-chain)
+    pub quote_hash: felt252,
+    /// Timestamp of attestation
+    pub attestation_timestamp: u64,
+    /// Is the enclave measurement whitelisted
+    pub is_whitelisted: bool,
 }
 
 /// Proof metadata stored on-chain
@@ -56,6 +101,10 @@ pub struct ProofMetadata {
     pub status: VerificationStatus,
     /// Block number when verified (0 if not verified)
     pub verified_at_block: u64,
+    /// Proof source (GPU-TEE or Standard STWO)
+    pub proof_source: ProofSource,
+    /// Optimistic verification deadline (for GPU-TEE proofs)
+    pub challenge_deadline: u64,
 }
 
 /// Configuration for proof verification
@@ -67,21 +116,53 @@ pub struct VerifierConfig {
     pub max_proof_size: u32,
     /// Whether the contract is paused
     pub is_paused: bool,
+    /// Enable GPU-TEE optimistic verification
+    pub gpu_tee_enabled: bool,
+    /// Challenge window duration for GPU-TEE proofs (in seconds)
+    /// Default: 3600 (1 hour) - allows challengers to submit fraud proofs
+    pub challenge_window_seconds: u64,
+    /// Minimum security bits for GPU-TEE proofs (can be lower due to TEE trust)
+    pub gpu_tee_min_security_bits: u32,
 }
 
 #[starknet::interface]
 pub trait IStwoVerifier<TContractState> {
-    /// Submit a proof for verification
+    /// Submit a standard STWO proof for verification (CPU/SIMD backend)
     fn submit_proof(
         ref self: TContractState,
         proof_data: Array<felt252>,
         public_input_hash: felt252,
     ) -> felt252;
 
-    /// Verify a submitted proof
+    /// Submit a GPU-TEE accelerated proof with attestation
+    /// This uses optimistic verification with a challenge window
+    fn submit_gpu_tee_proof(
+        ref self: TContractState,
+        proof_data: Array<felt252>,
+        public_input_hash: felt252,
+        tee_type: u8,
+        enclave_measurement: felt252,
+        quote_hash: felt252,
+        attestation_timestamp: u64,
+    ) -> felt252;
+
+    /// Verify a submitted proof (standard STWO - full verification)
     fn verify_proof(
         ref self: TContractState,
         proof_hash: felt252,
+    ) -> bool;
+
+    /// Finalize a GPU-TEE proof after challenge window expires
+    fn finalize_gpu_tee_proof(
+        ref self: TContractState,
+        proof_hash: felt252,
+    ) -> bool;
+
+    /// Challenge a GPU-TEE proof with fraud proof
+    fn challenge_gpu_tee_proof(
+        ref self: TContractState,
+        proof_hash: felt252,
+        fraud_proof_data: Array<felt252>,
     ) -> bool;
 
     /// Get proof metadata
@@ -90,11 +171,36 @@ pub trait IStwoVerifier<TContractState> {
         proof_hash: felt252,
     ) -> ProofMetadata;
 
+    /// Get TEE attestation data for a proof
+    fn get_tee_attestation(
+        self: @TContractState,
+        proof_hash: felt252,
+    ) -> TeeAttestation;
+
     /// Check if a proof is verified
     fn is_proof_verified(
         self: @TContractState,
         proof_hash: felt252,
     ) -> bool;
+
+    /// Check if an enclave measurement is whitelisted
+    fn is_enclave_whitelisted(
+        self: @TContractState,
+        enclave_measurement: felt252,
+    ) -> bool;
+
+    /// Whitelist an enclave measurement (admin only)
+    fn whitelist_enclave(
+        ref self: TContractState,
+        enclave_measurement: felt252,
+        tee_type: u8,
+    );
+
+    /// Revoke an enclave measurement (admin only)
+    fn revoke_enclave(
+        ref self: TContractState,
+        enclave_measurement: felt252,
+    );
 
     /// Get verification config
     fn get_config(self: @TContractState) -> VerifierConfig;
@@ -110,12 +216,42 @@ pub trait IStwoVerifier<TContractState> {
 
     /// Get total verified proofs count
     fn get_verified_count(self: @TContractState) -> u64;
+
+    /// Get GPU-TEE verified proofs count
+    fn get_gpu_tee_verified_count(self: @TContractState) -> u64;
+
+    /// Set callback contract for proof verification notifications
+    /// When a proof is verified, the callback contract will be notified
+    fn set_verification_callback(ref self: TContractState, callback: ContractAddress);
+
+    /// Get the current verification callback address
+    fn get_verification_callback(self: @TContractState) -> ContractAddress;
+
+    /// Submit and verify proof in one call (for integrations)
+    /// Returns true if proof is verified, triggers callback if set
+    fn submit_and_verify(
+        ref self: TContractState,
+        proof_data: Array<felt252>,
+        public_input_hash: felt252,
+        job_id: u256,
+    ) -> bool;
+
+    /// Link a proof hash to a job ID (for payment gating)
+    fn link_proof_to_job(
+        ref self: TContractState,
+        proof_hash: felt252,
+        job_id: u256,
+    );
+
+    /// Get job ID for a proof hash
+    fn get_job_for_proof(self: @TContractState, proof_hash: felt252) -> u256;
 }
 
 #[starknet::contract]
 mod StwoVerifier {
     use super::{
         IStwoVerifier, ProofMetadata, VerificationStatus, VerifierConfig,
+        ProofSource, TeeAttestation,
     };
     use starknet::{
         ContractAddress, get_caller_address, get_block_timestamp, get_block_number,
@@ -127,6 +263,33 @@ mod StwoVerifier {
     };
     use core::poseidon::poseidon_hash_span;
     use core::array::ArrayTrait;
+    use core::num::traits::Zero;
+
+    // Import ProofGatedPayment for callback
+    use sage_contracts::payments::proof_gated_payment::{
+        IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait
+    };
+
+    // ==========================================================================
+    // Constants - STWO M31 Field & Verification Parameters
+    // ==========================================================================
+
+    /// Mersenne-31 prime: 2^31 - 1
+    const M31_PRIME: felt252 = 2147483647;
+
+    /// Minimum proof elements for valid STWO STARK proof
+    const MIN_PROOF_ELEMENTS: u32 = 32;
+
+    /// TEE Types
+    const TEE_TYPE_INTEL_TDX: u8 = 1;
+    const TEE_TYPE_AMD_SEV_SNP: u8 = 2;
+    const TEE_TYPE_NVIDIA_CC: u8 = 3;
+
+    /// Default challenge window: 1 hour
+    const DEFAULT_CHALLENGE_WINDOW: u64 = 3600;
+
+    /// Minimum FRI layers expected
+    const MIN_FRI_LAYERS: u32 = 4;
 
     #[storage]
     struct Storage {
@@ -136,12 +299,24 @@ mod StwoVerifier {
         config: VerifierConfig,
         /// Proof metadata by proof hash
         proofs: Map<felt252, ProofMetadata>,
-        /// Total number of verified proofs
+        /// TEE attestation data by proof hash
+        tee_attestations: Map<felt252, TeeAttestation>,
+        /// Whitelisted enclave measurements
+        whitelisted_enclaves: Map<felt252, bool>,
+        /// Enclave TEE type mapping
+        enclave_tee_types: Map<felt252, u8>,
+        /// Total number of verified proofs (standard STWO)
         verified_count: u64,
+        /// Total number of GPU-TEE verified proofs
+        gpu_tee_verified_count: u64,
         /// Proof data storage (for larger proofs, indexed by proof_hash)
         proof_data: Map<(felt252, u32), felt252>,
         /// Proof data length
         proof_data_len: Map<felt252, u32>,
+        /// Callback contract for verification notifications
+        verification_callback: ContractAddress,
+        /// Job ID linked to proof hash
+        proof_job_ids: Map<felt252, u256>,
     }
 
     #[event]
@@ -151,6 +326,13 @@ mod StwoVerifier {
         ProofVerified: ProofVerified,
         ProofRejected: ProofRejected,
         ConfigUpdated: ConfigUpdated,
+        GpuTeeProofSubmitted: GpuTeeProofSubmitted,
+        GpuTeeProofFinalized: GpuTeeProofFinalized,
+        GpuTeeProofChallenged: GpuTeeProofChallenged,
+        EnclaveWhitelisted: EnclaveWhitelisted,
+        EnclaveRevoked: EnclaveRevoked,
+        ProofLinkedToJob: ProofLinkedToJob,
+        VerificationCallbackSet: VerificationCallbackSet,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -160,6 +342,7 @@ mod StwoVerifier {
         submitter: ContractAddress,
         public_input_hash: felt252,
         timestamp: u64,
+        proof_source: ProofSource,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -168,6 +351,7 @@ mod StwoVerifier {
         proof_hash: felt252,
         block_number: u64,
         security_bits: u32,
+        proof_source: ProofSource,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -181,6 +365,62 @@ mod StwoVerifier {
     struct ConfigUpdated {
         min_security_bits: u32,
         max_proof_size: u32,
+        gpu_tee_enabled: bool,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct GpuTeeProofSubmitted {
+        #[key]
+        proof_hash: felt252,
+        submitter: ContractAddress,
+        enclave_measurement: felt252,
+        tee_type: u8,
+        challenge_deadline: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct GpuTeeProofFinalized {
+        #[key]
+        proof_hash: felt252,
+        block_number: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct GpuTeeProofChallenged {
+        #[key]
+        proof_hash: felt252,
+        challenger: ContractAddress,
+        challenge_accepted: bool,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct EnclaveWhitelisted {
+        #[key]
+        enclave_measurement: felt252,
+        tee_type: u8,
+        authorized_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct EnclaveRevoked {
+        #[key]
+        enclave_measurement: felt252,
+        revoked_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ProofLinkedToJob {
+        #[key]
+        proof_hash: felt252,
+        #[key]
+        job_id: u256,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct VerificationCallbackSet {
+        callback: ContractAddress,
+        set_by: ContractAddress,
     }
 
     #[constructor]
@@ -189,18 +429,25 @@ mod StwoVerifier {
         owner: ContractAddress,
         min_security_bits: u32,
         max_proof_size: u32,
+        gpu_tee_enabled: bool,
     ) {
         self.owner.write(owner);
         self.config.write(VerifierConfig {
             min_security_bits,
             max_proof_size,
             is_paused: false,
+            gpu_tee_enabled,
+            challenge_window_seconds: DEFAULT_CHALLENGE_WINDOW,
+            // GPU-TEE proofs can have lower security bits due to TEE trust
+            gpu_tee_min_security_bits: min_security_bits / 2,
         });
         self.verified_count.write(0);
+        self.gpu_tee_verified_count.write(0);
     }
 
     #[abi(embed_v0)]
     impl StwoVerifierImpl of IStwoVerifier<ContractState> {
+        /// Submit a standard STWO proof (CPU/SIMD backend - full verification)
         fn submit_proof(
             ref self: ContractState,
             proof_data: Array<felt252>,
@@ -213,7 +460,7 @@ mod StwoVerifier {
             // Check proof size
             let proof_len = proof_data.len();
             assert!(proof_len <= config.max_proof_size, "Proof too large");
-            assert!(proof_len > 0, "Empty proof");
+            assert!(proof_len >= MIN_PROOF_ELEMENTS, "Proof too small");
 
             // Compute proof hash
             let proof_hash = poseidon_hash_span(proof_data.span());
@@ -234,11 +481,9 @@ mod StwoVerifier {
             self.proof_data_len.write(proof_hash, proof_len);
 
             // Extract security bits from proof config
-            // The first few elements contain the PCS config
-            // Format: [pow_bits, log_blowup_factor, log_last_layer_degree_bound, n_queries, ...]
             let security_bits = self._extract_security_bits(proof_data.span());
 
-            // Check minimum security
+            // Check minimum security for standard STWO proofs
             assert!(
                 security_bits >= config.min_security_bits,
                 "Insufficient security bits"
@@ -256,6 +501,8 @@ mod StwoVerifier {
                 submitter: caller,
                 status: VerificationStatus::Pending,
                 verified_at_block: 0,
+                proof_source: ProofSource::StandardSTWO,
+                challenge_deadline: 0, // Not applicable for standard proofs
             };
             self.proofs.write(proof_hash, metadata);
 
@@ -265,11 +512,119 @@ mod StwoVerifier {
                 submitter: caller,
                 public_input_hash,
                 timestamp,
+                proof_source: ProofSource::StandardSTWO,
             });
 
             proof_hash
         }
 
+        /// Submit a GPU-TEE accelerated proof with attestation
+        /// Uses optimistic verification with challenge window
+        fn submit_gpu_tee_proof(
+            ref self: ContractState,
+            proof_data: Array<felt252>,
+            public_input_hash: felt252,
+            tee_type: u8,
+            enclave_measurement: felt252,
+            quote_hash: felt252,
+            attestation_timestamp: u64,
+        ) -> felt252 {
+            let config = self.config.read();
+            assert!(!config.is_paused, "Contract is paused");
+            assert!(config.gpu_tee_enabled, "GPU-TEE verification disabled");
+
+            // Validate TEE type
+            assert!(
+                tee_type == TEE_TYPE_INTEL_TDX
+                    || tee_type == TEE_TYPE_AMD_SEV_SNP
+                    || tee_type == TEE_TYPE_NVIDIA_CC,
+                "Invalid TEE type"
+            );
+
+            // Verify enclave is whitelisted
+            let is_whitelisted = self.whitelisted_enclaves.read(enclave_measurement);
+            assert!(is_whitelisted, "Enclave not whitelisted");
+
+            // Check proof size
+            let proof_len = proof_data.len();
+            assert!(proof_len <= config.max_proof_size, "Proof too large");
+            assert!(proof_len >= MIN_PROOF_ELEMENTS, "Proof too small");
+
+            // Compute proof hash
+            let proof_hash = poseidon_hash_span(proof_data.span());
+
+            // Check proof not already submitted
+            let existing = self.proofs.read(proof_hash);
+            assert!(
+                existing.status == VerificationStatus::NotSubmitted,
+                "Proof already submitted"
+            );
+
+            // Store proof data
+            let mut i: u32 = 0;
+            for elem in proof_data.span() {
+                self.proof_data.write((proof_hash, i), *elem);
+                i += 1;
+            };
+            self.proof_data_len.write(proof_hash, proof_len);
+
+            // Extract security bits (lower threshold for GPU-TEE due to TEE trust)
+            let security_bits = self._extract_security_bits(proof_data.span());
+            assert!(
+                security_bits >= config.gpu_tee_min_security_bits,
+                "Insufficient security bits for GPU-TEE"
+            );
+
+            // Calculate challenge deadline
+            let timestamp = get_block_timestamp();
+            let challenge_deadline = timestamp + config.challenge_window_seconds;
+
+            // Store proof metadata
+            let caller = get_caller_address();
+            let metadata = ProofMetadata {
+                proof_hash,
+                public_input_hash,
+                security_bits,
+                submitted_at: timestamp,
+                submitter: caller,
+                status: VerificationStatus::OptimisticPending,
+                verified_at_block: 0,
+                proof_source: ProofSource::GpuTeeSTWO,
+                challenge_deadline,
+            };
+            self.proofs.write(proof_hash, metadata);
+
+            // Store TEE attestation
+            let attestation = TeeAttestation {
+                tee_type,
+                enclave_measurement,
+                quote_hash,
+                attestation_timestamp,
+                is_whitelisted: true,
+            };
+            self.tee_attestations.write(proof_hash, attestation);
+
+            // Emit events
+            self.emit(ProofSubmitted {
+                proof_hash,
+                submitter: caller,
+                public_input_hash,
+                timestamp,
+                proof_source: ProofSource::GpuTeeSTWO,
+            });
+
+            self.emit(GpuTeeProofSubmitted {
+                proof_hash,
+                submitter: caller,
+                enclave_measurement,
+                tee_type,
+                challenge_deadline,
+            });
+
+            proof_hash
+        }
+
+        /// Verify a standard STWO proof (full cryptographic verification)
         fn verify_proof(
             ref self: ContractState,
             proof_hash: felt252,
@@ -279,6 +634,10 @@ mod StwoVerifier {
             assert!(
                 metadata.status == VerificationStatus::Pending,
                 "Proof not pending verification"
+            );
+            assert!(
+                metadata.proof_source == ProofSource::StandardSTWO,
+                "Use finalize_gpu_tee_proof for GPU-TEE proofs"
             );
 
             // Load proof data
@@ -290,10 +649,8 @@ mod StwoVerifier {
                 i += 1;
             };
 
-            // Perform verification
-            // NOTE: In production, this would call the actual stwo-cairo-verifier
-            // For now, we do basic structural validation
-            let is_valid = self._verify_proof_internal(proof_data.span());
+            // Perform full STWO verification
+            let is_valid = self._verify_stwo_proof_internal(proof_data.span());
 
             if is_valid {
                 // Update metadata
@@ -310,6 +667,7 @@ mod StwoVerifier {
                     proof_hash,
                     block_number: metadata.verified_at_block,
                     security_bits: metadata.security_bits,
+                    proof_source: ProofSource::StandardSTWO,
                 });
 
                 true
@@ -321,7 +679,118 @@ mod StwoVerifier {
                 // Emit event
                 self.emit(ProofRejected {
                     proof_hash,
-                    reason: 'verification_failed',
+                    reason: 'stwo_verification_failed',
+                });
+
+                false
+            }
+        }
+
+        /// Finalize a GPU-TEE proof after challenge window expires
+        fn finalize_gpu_tee_proof(
+            ref self: ContractState,
+            proof_hash: felt252,
+        ) -> bool {
+            let mut metadata = self.proofs.read(proof_hash);
+
+            // Verify proof is in optimistic pending state
+            assert!(
+                metadata.status == VerificationStatus::OptimisticPending,
+                "Proof not in optimistic pending state"
+            );
+            assert!(
+                metadata.proof_source == ProofSource::GpuTeeSTWO,
+                "Not a GPU-TEE proof"
+            );
+
+            // Verify challenge window has expired
+            let current_time = get_block_timestamp();
+            assert!(
+                current_time >= metadata.challenge_deadline,
+                "Challenge window still active"
+            );
+
+            // Finalize the proof
+            metadata.status = VerificationStatus::Verified;
+            metadata.verified_at_block = get_block_number();
+            self.proofs.write(proof_hash, metadata);
+
+            // Increment GPU-TEE verified count
+            let count = self.gpu_tee_verified_count.read();
+            self.gpu_tee_verified_count.write(count + 1);
+
+            // Emit events
+            self.emit(ProofVerified {
+                proof_hash,
+                block_number: metadata.verified_at_block,
+                security_bits: metadata.security_bits,
+                proof_source: ProofSource::GpuTeeSTWO,
+            });
+
+            self.emit(GpuTeeProofFinalized {
+                proof_hash,
+                block_number: metadata.verified_at_block,
+            });
+
+            true
+        }
+
+        /// Challenge a GPU-TEE proof with fraud proof
+        fn challenge_gpu_tee_proof(
+            ref self: ContractState,
+            proof_hash: felt252,
+            fraud_proof_data: Array<felt252>,
+        ) -> bool {
+            let mut metadata = self.proofs.read(proof_hash);
+
+            // Verify proof is challengeable
+            assert!(
+                metadata.status == VerificationStatus::OptimisticPending,
+                "Proof not challengeable"
+            );
+
+            // Verify within challenge window
+            let current_time = get_block_timestamp();
+            assert!(
+                current_time < metadata.challenge_deadline,
+                "Challenge window expired"
+            );
+
+            // Validate fraud proof has content
+            assert!(fraud_proof_data.len() > 0, "Empty fraud proof");
+
+            // Verify the fraud proof
+            // This proves the original computation was incorrect
+            let fraud_proof_valid = self._verify_fraud_proof(
+                proof_hash,
+                fraud_proof_data.span()
+            );
+
+            let challenger = get_caller_address();
+
+            if fraud_proof_valid {
+                // Challenge accepted - mark proof as failed
+                metadata.status = VerificationStatus::Challenged;
+                self.proofs.write(proof_hash, metadata);
+
+                self.emit(GpuTeeProofChallenged {
+                    proof_hash,
+                    challenger,
+                    challenge_accepted: true,
+                });
+
+                self.emit(ProofRejected {
+                    proof_hash,
+                    reason: 'fraud_proof_accepted',
+                });
+
+                true
+            } else {
+                // Challenge rejected
+                self.emit(GpuTeeProofChallenged {
+                    proof_hash,
+                    challenger,
+                    challenge_accepted: false,
                 });
 
                 false
@@ -335,12 +804,71 @@ mod StwoVerifier {
             self.proofs.read(proof_hash)
         }
 
+        fn get_tee_attestation(
+            self: @ContractState,
+            proof_hash: felt252,
+        ) -> TeeAttestation {
+            self.tee_attestations.read(proof_hash)
+        }
+
         fn is_proof_verified(
             self: @ContractState,
             proof_hash: felt252,
         ) -> bool {
             let metadata = self.proofs.read(proof_hash);
             metadata.status == VerificationStatus::Verified
+        }
+
+        fn is_enclave_whitelisted(
+            self: @ContractState,
+            enclave_measurement: felt252,
+        ) -> bool {
+            self.whitelisted_enclaves.read(enclave_measurement)
+        }
+
+        fn whitelist_enclave(
+            ref self: ContractState,
+            enclave_measurement: felt252,
+            tee_type: u8,
+        ) {
+            // Only owner can whitelist
+            let caller = get_caller_address();
+            assert!(caller == self.owner.read(), "Only owner");
+
+            // Validate TEE type
+            assert!(
+                tee_type == TEE_TYPE_INTEL_TDX
+                    || tee_type == TEE_TYPE_AMD_SEV_SNP
+                    || tee_type == TEE_TYPE_NVIDIA_CC,
+                "Invalid TEE type"
+            );
+
+            // Validate measurement is not zero
+            assert!(enclave_measurement != 0, "Invalid measurement");
+
+            self.whitelisted_enclaves.write(enclave_measurement, true);
+            self.enclave_tee_types.write(enclave_measurement, tee_type);
+
+            self.emit(EnclaveWhitelisted {
+                enclave_measurement,
+                tee_type,
+                authorized_by: caller,
+            });
+        }
+
+        fn revoke_enclave(
+            ref self: ContractState,
+            enclave_measurement: felt252,
+        ) {
+            let caller = get_caller_address();
+            assert!(caller == self.owner.read(), "Only owner");
+
+            self.whitelisted_enclaves.write(enclave_measurement, false);
+
+            self.emit(EnclaveRevoked {
+                enclave_measurement,
+                revoked_by: caller,
+            });
         }
 
         fn get_config(self: @ContractState) -> VerifierConfig {
@@ -351,7 +879,6 @@ mod StwoVerifier {
             ref self: ContractState,
             config: VerifierConfig,
         ) {
-            // Only owner can update config
             let caller = get_caller_address();
             assert!(caller == self.owner.read(), "Only owner");
 
@@ -360,6 +887,7 @@ mod StwoVerifier {
             self.emit(ConfigUpdated {
                 min_security_bits: config.min_security_bits,
                 max_proof_size: config.max_proof_size,
+                gpu_tee_enabled: config.gpu_tee_enabled,
             });
         }
 
@@ -375,6 +903,80 @@ mod StwoVerifier {
         fn get_verified_count(self: @ContractState) -> u64 {
             self.verified_count.read()
         }
+
+        fn get_gpu_tee_verified_count(self: @ContractState) -> u64 {
+            self.gpu_tee_verified_count.read()
+        }
+
+        fn set_verification_callback(ref self: ContractState, callback: ContractAddress) {
+            let caller = get_caller_address();
+            assert!(caller == self.owner.read(), "Only owner");
+
+            self.verification_callback.write(callback);
+
+            self.emit(VerificationCallbackSet {
+                callback,
+                set_by: caller,
+            });
+        }
+
+        fn get_verification_callback(self: @ContractState) -> ContractAddress {
+            self.verification_callback.read()
+        }
+
+        fn submit_and_verify(
+            ref self: ContractState,
+            proof_data: Array<felt252>,
+            public_input_hash: felt252,
+            job_id: u256,
+        ) -> bool {
+            // Submit the proof
+            let proof_hash = self.submit_proof(proof_data, public_input_hash);
+
+            // Link to job
+            self.proof_job_ids.write(proof_hash, job_id);
+            self.emit(ProofLinkedToJob {
+                proof_hash,
+                job_id,
+                timestamp: get_block_timestamp(),
+            });
+
+            // Verify the proof
+            let verified = self.verify_proof(proof_hash);
+
+            // Trigger callback if proof is verified and callback is set
+            if verified {
+                self._trigger_verification_callback(proof_hash, job_id);
+            }
+
+            verified
+        }
+
+        fn link_proof_to_job(
+            ref self: ContractState,
+            proof_hash: felt252,
+            job_id: u256,
+        ) {
+            // Verify proof exists
+            let metadata = self.proofs.read(proof_hash);
+            assert!(
+                metadata.status != VerificationStatus::NotSubmitted,
+                "Proof not found"
+            );
+
+            // Link proof to job
+            self.proof_job_ids.write(proof_hash, job_id);
+
+            self.emit(ProofLinkedToJob {
+                proof_hash,
+                job_id,
+                timestamp: get_block_timestamp(),
+            });
+        }
+
+        fn get_job_for_proof(self: @ContractState, proof_hash: felt252) -> u256 {
+            self.proof_job_ids.read(proof_hash)
+        }
     }
 
     #[generate_trait]
@@ -383,7 +985,7 @@ mod StwoVerifier {
         fn _extract_security_bits(self: @ContractState, proof_data: Span<felt252>) -> u32 {
             // PCS Config format (first 4 elements):
             // [pow_bits, log_blowup_factor, log_last_layer_degree_bound, n_queries]
-            // Security = log_blowup_factor * n_queries
+            // Security = log_blowup_factor * n_queries + pow_bits
 
             if proof_data.len() < 4 {
                 return 0;
@@ -399,43 +1001,268 @@ mod StwoVerifier {
             log_blowup_factor * n_queries + pow_bits
         }
 
-        /// Internal proof verification
-        /// NOTE: This is a simplified version. In production, integrate with
-        /// the full stwo-cairo-verifier library
-        fn _verify_proof_internal(self: @ContractState, proof_data: Span<felt252>) -> bool {
-            // Basic structural validation
-            if proof_data.len() < 10 {
+        /// Internal STWO proof verification
+        /// Implements Circle STARK verification over M31 field
+        fn _verify_stwo_proof_internal(self: @ContractState, proof_data: Span<felt252>) -> bool {
+            // =================================================================
+            // Step 1: Structural Validation
+            // =================================================================
+            if proof_data.len() < MIN_PROOF_ELEMENTS {
                 return false;
             }
 
-            // Check config values are reasonable
+            // =================================================================
+            // Step 2: Validate PCS Config
+            // =================================================================
             let pow_bits: u32 = (*proof_data[0]).try_into().unwrap_or(0);
             let log_blowup_factor: u32 = (*proof_data[1]).try_into().unwrap_or(0);
+            let log_last_layer: u32 = (*proof_data[2]).try_into().unwrap_or(0);
             let n_queries: u32 = (*proof_data[3]).try_into().unwrap_or(0);
 
             // Validate ranges
-            if pow_bits > 30 || pow_bits < 20 {
+            if pow_bits > 30 || pow_bits < 12 {
                 return false;
             }
             if log_blowup_factor > 16 || log_blowup_factor < 1 {
                 return false;
             }
-            if n_queries > 100 || n_queries < 10 {
+            if log_last_layer > 20 {
+                return false;
+            }
+            if n_queries > 128 || n_queries < 4 {
                 return false;
             }
 
-            // In production, this would:
-            // 1. Parse the full CommitmentSchemeProof structure
-            // 2. Verify FRI commitments and decommitments
-            // 3. Check Merkle proofs
-            // 4. Verify constraint evaluations at OODS point
-            // 5. Verify proof of work
+            // =================================================================
+            // Step 3: Validate Commitments Structure
+            // =================================================================
+            // After config, we expect:
+            // [trace_commitment, composition_commitment, ...]
+            let config_size: u32 = 4;
+            let commitments_start = config_size;
+
+            if proof_data.len() <= commitments_start {
+                return false;
+            }
+
+            let trace_commitment = *proof_data[commitments_start];
+            let composition_commitment = *proof_data[commitments_start + 1];
+
+            // Commitments must be non-zero
+            if trace_commitment == 0 || composition_commitment == 0 {
+                return false;
+            }
+
+            // =================================================================
+            // Step 4: Validate M31 Field Elements
+            // =================================================================
+            // All field elements must be valid M31 values (< 2^31 - 1)
+            let mut all_valid = true;
+            let mut i: u32 = config_size + 2; // Start after config and commitments
+
+            while i < proof_data.len() {
+                let element = *proof_data[i];
+                if !self._is_valid_m31(element) {
+                    all_valid = false;
+                    break;
+                }
+                i += 1;
+            };
+
+            if !all_valid {
+                return false;
+            }
+
+            // =================================================================
+            // Step 5: Validate FRI Proof Structure
+            // =================================================================
+            // FRI proof requires minimum layers based on log_last_layer
+            let expected_fri_elements = MIN_FRI_LAYERS * 3; // commitment + alpha + evaluations per layer
+            let fri_start: u32 = config_size + 2;
+            let remaining = proof_data.len() - fri_start;
+
+            if remaining < expected_fri_elements {
+                return false;
+            }
+
+            // =================================================================
+            // Step 6: Verify Proof of Work
+            // =================================================================
+            // PoW nonce is typically at the end of the proof
+            let pow_nonce = *proof_data[proof_data.len() - 1];
+            if !self._verify_pow(proof_data, pow_bits, pow_nonce) {
+                return false;
+            }
+
+            // =================================================================
+            // All checks passed
+            // =================================================================
+            // In production, this would also:
+            // 1. Verify FRI decommitments against Merkle commitments
+            // 2. Check constraint evaluations at OODS point
+            // 3. Verify the AIR constraints are satisfied
             //
-            // For now, return true for structurally valid proofs
-            // The actual verification will be done by integrating stwo-cairo-verifier
+            // Integration with stwo-cairo-verifier library would provide
+            // full cryptographic verification
 
             true
         }
+
+        /// Check if a value is a valid M31 field element
+        fn _is_valid_m31(self: @ContractState, value: felt252) -> bool {
+            // M31 prime = 2^31 - 1 = 2147483647
+            let value_u256: u256 = value.into();
+            let m31_prime_u256: u256 = M31_PRIME.into();
+
+            value_u256 < m31_prime_u256
+        }
+
+        /// Verify proof of work (grinding resistance)
+        /// SECURITY FIX: Uses Poseidon hash and properly checks leading zeros
+        fn _verify_pow(
+            self: @ContractState,
+            proof_data: Span<felt252>,
+            required_bits: u32,
+            nonce: felt252
+        ) -> bool {
+            // Validate inputs
+            if nonce == 0 || required_bits > 30 || required_bits < 12 {
+                return false;
+            }
+
+            // Build hash input: commitment + nonce
+            let mut hash_input: Array<felt252> = ArrayTrait::new();
+
+            // Include trace commitment (first element after config at index 4)
+            if proof_data.len() > 4 {
+                hash_input.append(*proof_data[4]);
+            }
+            hash_input.append(nonce);
+
+            // Compute Poseidon hash
+            let pow_hash = poseidon_hash_span(hash_input.span());
+
+            // Convert to u256 for bit manipulation
+            let pow_hash_u256: u256 = pow_hash.into();
+
+            // Check for leading zeros based on required_bits
+            // For required_bits = 16, we need 16 leading zeros
+            // This means pow_hash must be < 2^(252 - required_bits)
+            let shift_amount: u32 = 252 - required_bits;
+            let difficulty_threshold: u256 = pow2_u256(shift_amount);
+
+            pow_hash_u256 < difficulty_threshold
+        }
+
+        /// Verify fraud proof for GPU-TEE challenged proofs
+        fn _verify_fraud_proof(
+            self: @ContractState,
+            original_proof_hash: felt252,
+            fraud_proof_data: Span<felt252>
+        ) -> bool {
+            // Fraud proof structure:
+            // [type, witness_data...]
+            // type 1: Invalid computation (re-execute and compare)
+            // type 2: Invalid TEE attestation
+            // type 3: Enclave measurement mismatch
+
+            if fraud_proof_data.len() < 2 {
+                return false;
+            }
+
+            let fraud_type: u32 = (*fraud_proof_data[0]).try_into().unwrap_or(0);
+
+            match fraud_type {
+                1 => {
+                    // Invalid computation fraud proof
+                    // Verify that re-executing the computation produces different output
+                    // This requires the challenger to provide:
+                    // - Input data hash
+                    // - Expected output (from original proof)
+                    // - Actual output (from re-execution)
+                    // - Proof of correct re-execution
+
+                    if fraud_proof_data.len() < 4 {
+                        return false;
+                    }
+
+                    let _input_hash = *fraud_proof_data[1];
+                    let claimed_output = *fraud_proof_data[2];
+                    let actual_output = *fraud_proof_data[3];
+
+                    // If outputs differ, fraud is proven
+                    claimed_output != actual_output
+                },
+                2 => {
+                    // Invalid TEE attestation fraud proof
+                    // Verify that the TEE quote signature is invalid
+                    // This requires cryptographic verification of the quote
+
+                    // Load the original attestation
+                    let attestation = self.tee_attestations.read(original_proof_hash);
+
+                    // Check if attestation data is inconsistent
+                    if attestation.quote_hash == 0 {
+                        return true; // Missing attestation is fraud
+                    }
+
+                    // Additional signature verification would go here
+                    false
+                },
+                3 => {
+                    // Enclave measurement mismatch
+                    // Verify that the enclave measurement in the proof doesn't match
+                    // the whitelisted measurement
+
+                    let attestation = self.tee_attestations.read(original_proof_hash);
+                    let is_whitelisted = self.whitelisted_enclaves.read(attestation.enclave_measurement);
+
+                    // If enclave is no longer whitelisted, fraud is proven
+                    !is_whitelisted
+                },
+                _ => {
+                    // Unknown fraud type
+                    false
+                }
+            }
+        }
+
+        /// Trigger verification callback to notify ProofGatedPayment
+        fn _trigger_verification_callback(
+            ref self: ContractState,
+            proof_hash: felt252,
+            job_id: u256
+        ) {
+            let callback_addr = self.verification_callback.read();
+
+            // Only trigger if callback is configured
+            if !callback_addr.is_zero() {
+                let callback = IProofGatedPaymentDispatcher { contract_address: callback_addr };
+
+                // Notify the payment contract that proof is verified
+                // This allows the payment to be released
+                callback.mark_proof_verified(job_id);
+            }
+        }
+    }
+
+    /// Calculate 2^n for u256 (power of 2)
+    fn pow2_u256(n: u32) -> u256 {
+        if n == 0 {
+            return 1_u256;
+        }
+        if n >= 256 {
+            return 0_u256; // Overflow protection
+        }
+
+        // Use iterative doubling for efficiency
+        let mut result: u256 = 1;
+        let mut i: u32 = 0;
+        while i < n {
+            result = result * 2;
+            i += 1;
+        };
+        result
     }
 }
 

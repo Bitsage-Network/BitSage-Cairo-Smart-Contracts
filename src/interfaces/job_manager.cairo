@@ -88,6 +88,7 @@ pub enum JobState {
     Queued,
     Processing,
     Completed,
+    Paid,       // SECURITY: Added to prevent double-distribution of rewards
     Failed,
     Cancelled
 }
@@ -227,4 +228,45 @@ pub trait IJobManager<TContractState> {
 
     /// Get gas efficiency metrics for a job (estimated, reserved, actual)
     fn get_job_gas_efficiency(self: @TContractState, job_id: JobId) -> (u256, u256, u256);
+
+    // ============================================================================
+    // PHASE 2: Additional View Functions
+    // ============================================================================
+
+    /// Get total number of jobs submitted
+    fn get_total_jobs(self: @TContractState) -> u64;
+
+    /// Get number of currently active (in-progress) jobs
+    fn get_active_jobs(self: @TContractState) -> u64;
+
+    /// Get number of completed jobs
+    fn get_completed_jobs(self: @TContractState) -> u64;
+
+    /// Get worker address from worker ID
+    fn get_worker_address(self: @TContractState, worker_id: WorkerId) -> ContractAddress;
+
+    /// Get worker ID from address (reverse lookup)
+    fn get_worker_id_by_address(self: @TContractState, worker_address: ContractAddress) -> WorkerId;
+
+    /// Get total registered worker count
+    fn get_worker_count(self: @TContractState) -> u64;
+
+    /// Check if a worker is active
+    fn is_worker_active(self: @TContractState, worker_id: WorkerId) -> bool;
+
+    /// Check if contract is paused
+    fn is_paused(self: @TContractState) -> bool;
+
+    /// Get platform configuration values
+    fn get_platform_config(self: @TContractState) -> (u16, u256, u64, u256); // (fee_bps, min_payment, max_duration, dispute_fee)
+
+    // ============================================================================
+    // PHASE 3: Proof-Gated Payment Integration
+    // ============================================================================
+
+    /// Admin: Set ProofGatedPayment contract address for proof-based payment release
+    fn set_proof_gated_payment(ref self: TContractState, payment: ContractAddress);
+
+    /// Check if proof is verified and payment is ready for a job
+    fn is_proof_payment_ready(self: @TContractState, job_id: JobId) -> bool;
 } 

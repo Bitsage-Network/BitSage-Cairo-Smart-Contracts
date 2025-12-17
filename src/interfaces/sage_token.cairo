@@ -437,4 +437,132 @@ pub trait ISAGEToken<TContractState> {
     /// @param new_implementation: New implementation address
     /// @param timelock_duration: Timelock duration in seconds
     fn authorize_upgrade(ref self: TContractState, new_implementation: ContractAddress, timelock_duration: u64);
+
+    /// Phase 3: Revenue-based burn rate configuration
+
+    /// Set revenue burn rate configuration
+    /// @param target_monthly_revenue: Target monthly revenue for baseline burn rate
+    /// @param modifier_max: Maximum burn rate adjustment in basis points
+    /// @param enabled: Whether revenue-based adjustment is enabled
+    fn set_revenue_burn_config(
+        ref self: TContractState,
+        target_monthly_revenue: u256,
+        modifier_max: u32,
+        enabled: bool
+    );
+
+    /// Get current revenue burn configuration
+    /// @return target_revenue: Target monthly revenue
+    /// @return modifier_max: Maximum adjustment in basis points
+    /// @return enabled: Whether adjustment is enabled
+    /// @return last_adjustment: Last revenue-based adjustment applied
+    fn get_revenue_burn_config(self: @TContractState) -> (u256, u32, bool, i32);
+
+    /// Get effective burn rate (base + revenue adjustment)
+    /// @return effective_rate: Current effective burn rate in basis points
+    /// @return base_rate: Time-based base rate
+    /// @return revenue_modifier: Revenue-based adjustment
+    fn get_effective_burn_rate(self: @TContractState) -> (u32, u32, i32);
+
+    /// Phase 3.6: Supply cap functions
+
+    /// Get max supply cap
+    /// @return max_supply: Maximum allowed total supply
+    fn get_max_supply(self: @TContractState) -> u256;
+
+    /// Get remaining mintable supply
+    /// @return remaining: How many tokens can still be minted before hitting cap
+    fn get_remaining_mintable(self: @TContractState) -> u256;
+
+    /// Get supply utilization percentage
+    /// @return percentage: Current supply as percentage of max (basis points)
+    fn get_supply_utilization(self: @TContractState) -> u32;
+
+    /// Phase 3.7: Token flow reconciliation functions
+
+    /// Take a snapshot of current token flow metrics
+    /// @return snapshot_id: ID of the created snapshot
+    fn take_token_flow_snapshot(ref self: TContractState) -> u256;
+
+    /// Get token flow summary
+    /// @return total_minted: Total tokens minted since launch
+    /// @return total_burned: Total tokens burned
+    /// @return net_change_abs: Absolute value of net change
+    /// @return is_deflationary: True if burned > minted (supply decreasing)
+    fn get_token_flow_summary(self: @TContractState) -> (u256, u256, u256, bool);
+
+    /// Get milestone status
+    /// @return burn_10pct: Whether 10% burn milestone reached
+    /// @return burn_25pct: Whether 25% burn milestone reached
+    /// @return burn_50pct: Whether 50% burn milestone reached
+    /// @return revenue_1m: Whether 1M revenue milestone reached
+    /// @return revenue_10m: Whether 10M revenue milestone reached
+    fn get_milestone_status(self: @TContractState) -> (bool, bool, bool, bool, bool);
+
+    // ====================================================================
+    // UPGRADABILITY FUNCTIONS - Timelock-protected contract upgrades
+    // ====================================================================
+
+    /// Schedule a contract upgrade with timelock delay
+    /// @param new_class_hash: ClassHash of the new implementation
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+
+    /// Execute a scheduled upgrade after timelock has passed
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a scheduled upgrade before execution
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get upgrade governance info
+    /// @return pending: Pending upgrade class hash
+    /// @return scheduled_at: When upgrade was scheduled
+    /// @return execute_after: When upgrade can be executed
+    /// @return delay: Current upgrade delay
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64, u64);
+
+    /// Set the upgrade timelock delay (24h to 7 days)
+    /// @param new_delay: New delay in seconds
+    fn set_upgrade_delay(ref self: TContractState, new_delay: u64);
+
+    // ====================================================================
+    // EMISSION SCHEDULE FUNCTIONS - Deflationary tokenomics model
+    // ====================================================================
+
+    /// Emit ecosystem rewards for the current month
+    /// Can be called once per month based on decay schedule
+    /// @param recipient: Address to receive the ecosystem emission
+    fn emit_ecosystem_rewards(ref self: TContractState, recipient: ContractAddress);
+
+    /// Get current ecosystem emission status
+    /// @return remaining: Remaining in ecosystem pool
+    /// @return emitted: Total emitted so far
+    /// @return month: Current emission month (0-59)
+    /// @return last_emission: Timestamp of last emission
+    /// @return rate: Current emission rate in basis points
+    fn get_ecosystem_emission_status(self: @TContractState) -> (u256, u256, u32, u64, u32);
+
+    /// Get all allocation pool balances
+    /// @return ecosystem, treasury, team, public_sale, pre_seed, seed, strategic, advisors, code_dev
+    fn get_pool_balances(self: @TContractState) -> (u256, u256, u256, u256, u256, u256, u256, u256, u256);
+
+    // ====================================================================
+    // VESTING RELEASE FUNCTIONS - Linear vesting with cliffs
+    // ====================================================================
+
+    /// Release vested treasury tokens (linear over 48 months)
+    fn release_treasury_vesting(ref self: TContractState);
+
+    /// Release vested team tokens (12 month cliff, then linear over 36 months)
+    fn release_team_vesting(ref self: TContractState);
+
+    /// Release vested public sale tokens (remaining 40M linear over 12 months)
+    /// @param beneficiary: Address to receive the vested tokens
+    fn release_public_sale_vesting(ref self: TContractState, beneficiary: ContractAddress);
+
+    /// Get vesting status for main pools
+    /// @return treasury_vested_pct: Treasury vesting progress in basis points
+    /// @return team_vested_pct: Team vesting progress in basis points
+    /// @return team_cliff_passed: Whether team cliff period has passed
+    /// @return public_sale_vested_pct: Public sale vesting progress in basis points
+    fn get_vesting_status(self: @TContractState) -> (u32, u32, bool, u32);
 } 

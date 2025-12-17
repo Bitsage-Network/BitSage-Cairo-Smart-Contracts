@@ -66,4 +66,17 @@ pub mod oracle;
 // - Escrow for job payments
 pub mod economics;
 
+// Tokenomics - Official SAGE Token Distribution & Vesting Schedules
+// Distribution: Ecosystem 30%, Treasury 15%, Team 15%, Liquidity 10%,
+//               Pre-Seed 7.5%, Code Dev 5%, Public Sale 5%, Strategic 5%,
+//               Seed 5%, Advisors 2.5%
+// Vesting: Team (12Mo cliff + 36Mo), Investors (12-24Mo), Treasury (48Mo),
+//          Ecosystem (5-Year Emission)
+pub mod tokenomics;
+
+// Payment Router - Multi-token payment system
+// Accepts: USDC, STRK, wBTC, SAGE with tiered discounts
+// Features: OTC desk (no AMM dependency), staked SAGE credits, privacy payments
+pub mod payments;
+
 // Tests are located in the tests/ directory and managed by snforge

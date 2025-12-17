@@ -4,7 +4,6 @@
 #[starknet::contract]
 mod FraudProof {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
-    use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess, 
         StorageMapReadAccess, StorageMapWriteAccess, Map
@@ -15,6 +14,7 @@ mod FraudProof {
 
     // Challenge status
     #[derive(Drop, Serde, Copy, PartialEq, starknet::Store)]
+    #[allow(starknet::store_no_default_variant)]
     enum ChallengeStatus {
         Pending,
         ValidProof,    // Challenger wins

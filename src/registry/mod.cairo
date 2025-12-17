@@ -10,3 +10,7 @@
 
 pub mod address_registry;
 
+/// Enclave Registry - Central whitelist for TEE enclave measurements
+/// Used by both proof_verifier and stwo_verifier for consistent enclave management
+pub mod enclave_registry;
+

@@ -12,10 +12,49 @@ pub const PAGINATION_LIMIT: u32 = 100; // Maximum results per page
 
 /// Tokenomics Constants (SAGE Token)
 pub const TOTAL_SUPPLY: u256 = 1_000_000_000_000_000_000_000_000_000; // 1B tokens with 18 decimals
+pub const MAX_SUPPLY: u256 = 1_000_000_000_000_000_000_000_000_000; // 1B tokens max cap (deflationary model)
 pub const MAX_MINT_PERCENTAGE: u32 = 1000; // 10% max mint percentage in basis points
 pub const SCALE: u256 = 1_000_000_000_000_000_000; // 18 decimal scale
 pub const SECONDS_PER_YEAR: u64 = 31536000; // 365 days in seconds
 pub const SECONDS_PER_MONTH: u64 = 2592000; // 30 days in seconds
+
+/// Token Allocation Pools (with 18 decimals)
+/// Total: 1,000,000,000 SAGE = 1B
+pub const ALLOC_ECOSYSTEM_REWARDS: u256 = 300_000_000_000_000_000_000_000_000; // 30% = 300M
+pub const ALLOC_TREASURY: u256 = 150_000_000_000_000_000_000_000_000; // 15% = 150M
+pub const ALLOC_TEAM: u256 = 150_000_000_000_000_000_000_000_000; // 15% = 150M
+pub const ALLOC_MARKET_LIQUIDITY: u256 = 100_000_000_000_000_000_000_000_000; // 10% = 100M
+pub const ALLOC_PRE_SEED: u256 = 75_000_000_000_000_000_000_000_000; // 7.5% = 75M
+pub const ALLOC_CODE_DEV_INFRA: u256 = 50_000_000_000_000_000_000_000_000; // 5% = 50M
+pub const ALLOC_PUBLIC_SALE: u256 = 50_000_000_000_000_000_000_000_000; // 5% = 50M
+pub const ALLOC_STRATEGIC_PARTNERS: u256 = 50_000_000_000_000_000_000_000_000; // 5% = 50M
+pub const ALLOC_SEED: u256 = 50_000_000_000_000_000_000_000_000; // 5% = 50M
+pub const ALLOC_ADVISORS: u256 = 25_000_000_000_000_000_000_000_000; // 2.5% = 25M
+
+/// TGE Unlock Amounts
+pub const TGE_MARKET_LIQUIDITY: u256 = 100_000_000_000_000_000_000_000_000; // 100% = 100M
+pub const TGE_PUBLIC_SALE: u256 = 10_000_000_000_000_000_000_000_000; // 20% of 50M = 10M
+pub const TGE_TOTAL: u256 = 110_000_000_000_000_000_000_000_000; // Total at TGE = 110M
+
+/// Vesting Periods (in months)
+pub const VEST_TREASURY_MONTHS: u64 = 48;
+pub const VEST_TEAM_CLIFF: u64 = 12;
+pub const VEST_TEAM_MONTHS: u64 = 36;
+pub const VEST_PRE_SEED_MONTHS: u64 = 12;
+pub const VEST_CODE_DEV_MONTHS: u64 = 36;
+pub const VEST_PUBLIC_SALE_MONTHS: u64 = 6;
+pub const VEST_STRATEGIC_MONTHS: u64 = 24;
+pub const VEST_SEED_MONTHS: u64 = 24;
+pub const VEST_ADVISORS_CLIFF: u64 = 12;
+pub const VEST_ADVISORS_MONTHS: u64 = 24;
+
+/// Ecosystem Emission Rates (basis points of remaining per month)
+/// Year 1: 3%, Year 2: 2.5%, Year 3: 2%, Year 4: 1.5%, Year 5: 1%
+pub const EMISSION_RATE_YEAR_1: u32 = 300; // 3.0%
+pub const EMISSION_RATE_YEAR_2: u32 = 250; // 2.5%
+pub const EMISSION_RATE_YEAR_3: u32 = 200; // 2.0%
+pub const EMISSION_RATE_YEAR_4: u32 = 150; // 1.5%
+pub const EMISSION_RATE_YEAR_5: u32 = 100; // 1.0%
 
 /// Worker Tier Thresholds (SAGE tokens with 18 decimals)
 pub const BASIC_WORKER_THRESHOLD: u256 = 100_000_000_000_000_000_000; // 100 SAGE
@@ -266,4 +305,99 @@ pub const VOTING_POWER_MULTIPLIER_VETERAN: u32 = 150;   // 1.5x
 pub const GOVERNANCE_STRATEGIC_THRESHOLD: u256 = 100000000000000000000000; // 100,000 tokens
 
 /// Governance participation requirements
-pub const QUORUM_PERCENTAGE: u32 = 2000; // 20% in basis points 
+pub const QUORUM_PERCENTAGE: u32 = 2000; // 20% in basis points
+
+// ============================================================================
+// TOKEN DISTRIBUTION ALLOCATIONS (Official Tokenomics v1.0)
+// See tokenomics.cairo for full implementation
+// ============================================================================
+
+/// Distribution Pool Allocations (Basis Points - 10000 = 100%)
+pub const ALLOCATION_ECOSYSTEM_BPS: u256 = 3000;      // 30.0% - Ecosystem Rewards
+pub const ALLOCATION_TREASURY_BPS: u256 = 1500;       // 15.0% - Treasury
+pub const ALLOCATION_TEAM_BPS: u256 = 1500;           // 15.0% - Team
+pub const ALLOCATION_LIQUIDITY_BPS: u256 = 1000;      // 10.0% - Market Liquidity
+pub const ALLOCATION_PRE_SEED_BPS: u256 = 750;        // 7.5%  - Pre-Seed Investors
+pub const ALLOCATION_CODE_DEV_BPS: u256 = 500;        // 5.0%  - Code Dev & Infrastructure
+pub const ALLOCATION_PUBLIC_SALE_BPS: u256 = 500;     // 5.0%  - Public Sale
+pub const ALLOCATION_STRATEGIC_BPS: u256 = 500;       // 5.0%  - Strategic Partners
+pub const ALLOCATION_SEED_BPS: u256 = 500;            // 5.0%  - Seed Investors
+pub const ALLOCATION_ADVISORS_BPS: u256 = 250;        // 2.5%  - Advisors
+
+/// Token Amounts per Pool (with 18 decimals)
+pub const TOKENS_ECOSYSTEM: u256 = 300_000_000_000_000_000_000_000_000;   // 300M SAGE
+pub const TOKENS_TREASURY: u256 = 150_000_000_000_000_000_000_000_000;    // 150M SAGE
+pub const TOKENS_TEAM: u256 = 150_000_000_000_000_000_000_000_000;        // 150M SAGE
+pub const TOKENS_LIQUIDITY: u256 = 100_000_000_000_000_000_000_000_000;   // 100M SAGE
+pub const TOKENS_PRE_SEED: u256 = 75_000_000_000_000_000_000_000_000;     // 75M SAGE
+pub const TOKENS_CODE_DEV: u256 = 50_000_000_000_000_000_000_000_000;     // 50M SAGE
+pub const TOKENS_PUBLIC_SALE: u256 = 50_000_000_000_000_000_000_000_000;  // 50M SAGE
+pub const TOKENS_STRATEGIC: u256 = 50_000_000_000_000_000_000_000_000;    // 50M SAGE
+pub const TOKENS_SEED: u256 = 50_000_000_000_000_000_000_000_000;         // 50M SAGE
+pub const TOKENS_ADVISORS: u256 = 25_000_000_000_000_000_000_000_000;     // 25M SAGE
+
+/// Investor Category Total (Pre-Seed + Seed + Strategic = 17.5%)
+pub const ALLOCATION_INVESTORS_TOTAL_BPS: u256 = 1750;
+pub const TOKENS_INVESTORS_TOTAL: u256 = 175_000_000_000_000_000_000_000_000; // 175M SAGE
+
+// ============================================================================
+// VESTING SCHEDULE DURATIONS (in seconds)
+// ============================================================================
+
+/// Team: 12-Month Cliff + 36-Month Linear Vesting
+pub const TEAM_CLIFF_SECONDS: u64 = 31_536_000;        // 12 months
+pub const TEAM_VESTING_SECONDS: u64 = 93_312_000;     // 36 months
+pub const TEAM_TOTAL_SECONDS: u64 = 124_848_000;      // 48 months total
+
+/// Pre-Seed: 12-Month Linear Vesting (no cliff)
+pub const PRE_SEED_CLIFF_SECONDS: u64 = 0;
+pub const PRE_SEED_VESTING_SECONDS: u64 = 31_536_000; // 12 months
+
+/// Seed: 24-Month Linear Vesting (no cliff)
+pub const SEED_CLIFF_SECONDS: u64 = 0;
+pub const SEED_VESTING_SECONDS: u64 = 63_072_000;     // 24 months
+
+/// Strategic Partners: 24-Month Linear Vesting (no cliff)
+pub const STRATEGIC_CLIFF_SECONDS: u64 = 0;
+pub const STRATEGIC_VESTING_SECONDS: u64 = 63_072_000; // 24 months
+
+/// Advisors: 12-Month Cliff + 24-Month Linear Vesting
+pub const ADVISORS_CLIFF_SECONDS: u64 = 31_536_000;   // 12 months
+pub const ADVISORS_VESTING_SECONDS: u64 = 63_072_000; // 24 months
+pub const ADVISORS_TOTAL_SECONDS: u64 = 94_608_000;   // 36 months total
+
+/// Treasury: 48-Month Linear Unlocks (no cliff)
+pub const TREASURY_CLIFF_SECONDS: u64 = 0;
+pub const TREASURY_VESTING_SECONDS: u64 = 124_848_000; // 48 months
+
+/// Code Dev & Infrastructure: 36-Month Linear Vesting
+pub const CODE_DEV_CLIFF_SECONDS: u64 = 0;
+pub const CODE_DEV_VESTING_SECONDS: u64 = 93_312_000; // 36 months
+
+/// Public Sale: 20% TGE + 6-Month Linear for remaining 80%
+pub const PUBLIC_SALE_TGE_UNLOCK_BPS: u256 = 2000;    // 20% at TGE
+pub const PUBLIC_SALE_CLIFF_SECONDS: u64 = 0;
+pub const PUBLIC_SALE_VESTING_SECONDS: u64 = 15_768_000; // 6 months
+
+/// Ecosystem: 5-Year Emission Schedule
+pub const ECOSYSTEM_EMISSION_SECONDS: u64 = 157_680_000; // 60 months (5 years)
+pub const ECOSYSTEM_EMISSION_MONTHS: u64 = 60;
+
+// ============================================================================
+// ECOSYSTEM EMISSION RATES (Monthly % of remaining, in basis points)
+// ============================================================================
+
+/// Year 1 (Months 1-12): 3% of remaining tokens per month
+pub const EMISSION_YEAR_1_RATE_BPS: u256 = 300;
+
+/// Year 2 (Months 13-24): 2.5% of remaining tokens per month
+pub const EMISSION_YEAR_2_RATE_BPS: u256 = 250;
+
+/// Year 3 (Months 25-36): 2% of remaining tokens per month
+pub const EMISSION_YEAR_3_RATE_BPS: u256 = 200;
+
+/// Year 4 (Months 37-48): 1.5% of remaining tokens per month
+pub const EMISSION_YEAR_4_RATE_BPS: u256 = 150;
+
+/// Year 5 (Months 49-60): 1% of remaining tokens per month
+pub const EMISSION_YEAR_5_RATE_BPS: u256 = 100;
