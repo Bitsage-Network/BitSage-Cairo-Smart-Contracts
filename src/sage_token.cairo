@@ -33,7 +33,6 @@ pub mod SAGEToken {
     };
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::upgrades::UpgradeableComponent;
-    use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::ClassHash;
 
     // Component declarations
@@ -51,9 +50,7 @@ pub mod SAGEToken {
         ALLOC_PRE_SEED, ALLOC_CODE_DEV_INFRA, ALLOC_PUBLIC_SALE, ALLOC_STRATEGIC_PARTNERS,
         ALLOC_SEED, ALLOC_ADVISORS, TGE_TOTAL, TGE_PUBLIC_SALE,
         // Vesting periods
-        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS, VEST_PRE_SEED_MONTHS,
-        VEST_CODE_DEV_MONTHS, VEST_PUBLIC_SALE_MONTHS, VEST_STRATEGIC_MONTHS,
-        VEST_SEED_MONTHS, VEST_ADVISORS_CLIFF, VEST_ADVISORS_MONTHS,
+        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS, VEST_PUBLIC_SALE_MONTHS,
         // Emission rates
         EMISSION_RATE_YEAR_1, EMISSION_RATE_YEAR_2, EMISSION_RATE_YEAR_3,
         EMISSION_RATE_YEAR_4, EMISSION_RATE_YEAR_5

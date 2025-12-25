@@ -182,7 +182,7 @@ mod ReferralSystem {
     use super::{
         IReferralSystem, ReferrerTier, ReferrerProfile, ReferredUser, ReferralConfig
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
+    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map

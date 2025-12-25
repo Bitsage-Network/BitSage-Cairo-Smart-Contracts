@@ -15,7 +15,7 @@
 use starknet::ContractAddress;
 use sage_contracts::obelysk::elgamal::{
     ECPoint, ElGamalCiphertext, EncryptedBalance, EncryptionProof,
-    derive_public_key, decrypt_point, ec_mul, ec_add, ec_neg, ec_sub,
+    derive_public_key, ec_mul, ec_add, ec_sub,
     generator, generator_h, hash_points, pedersen_commit, is_zero,
     get_c1, get_c2, get_commitment, create_proof_with_commitment
 };
@@ -225,10 +225,10 @@ pub trait IWorkerPrivacyHelper<TContractState> {
 #[starknet::contract]
 mod WorkerPrivacyHelper {
     use super::{IWorkerPrivacyHelper, ECPoint, ElGamalCiphertext, EncryptionProof, is_zero};
-    use starknet::{ContractAddress, get_caller_address, get_contract_address};
+    use starknet::{ContractAddress, get_caller_address};
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
-        StorageMapReadAccess, StorageMapWriteAccess, Map
+        StorageMapReadAccess, Map
     };
 
     // Import PaymentRouter and PrivacyRouter

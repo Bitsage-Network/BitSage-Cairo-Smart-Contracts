@@ -41,7 +41,7 @@ use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTr
 
 // Shared constants
 use sage_contracts::utils::constants::{
-    SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE, BPS_DENOMINATOR
+    SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE
 };
 
 #[starknet::contract]
@@ -56,7 +56,7 @@ mod CDCPool {
         WorkerRegistered, WorkerDeactivated, WorkerReactivated, StakeAdded, UnstakeRequested,
         UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased,
         // Shared constants
-        SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE, BPS_DENOMINATOR
+        SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE
     };
     use core::num::traits::Zero;
 

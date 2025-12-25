@@ -14,7 +14,7 @@
 
 use starknet::ContractAddress;
 use sage_contracts::obelysk::elgamal::{
-    ECPoint, ElGamalCiphertext, EncryptedBalance, PublicKey,
+    ECPoint, ElGamalCiphertext, EncryptedBalance,
     EncryptionProof, TransferProof
 };
 
@@ -133,10 +133,10 @@ mod PrivacyRouter {
         IPrivacyRouter, PrivateAccount, PrivateTransfer, PrivateWorkerPayment
     };
     use sage_contracts::obelysk::elgamal::{
-        ECPoint, ElGamalCiphertext, EncryptedBalance, PublicKey,
-        EncryptionProof, TransferProof,
+        ECPoint, ElGamalCiphertext, EncryptedBalance,
+        EncryptionProof,
         ec_zero, is_zero, zero_ciphertext, homomorphic_add, homomorphic_sub,
-        verify_ciphertext, encrypt, hash_points, rollup_balance,
+        verify_ciphertext, hash_points, rollup_balance,
         get_c1, get_c2, get_commitment
     };
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};

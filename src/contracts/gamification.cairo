@@ -572,7 +572,7 @@ mod Gamification {
                 let staking = IWorkerStakingDispatcher { contract_address: staking_addr };
                 staking.get_worker_address(worker_id)
             } else {
-                starknet::contract_address_const::<0>()
+                0.try_into().unwrap()
             };
 
             // Transfer reward

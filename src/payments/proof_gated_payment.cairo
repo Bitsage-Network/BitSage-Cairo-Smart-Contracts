@@ -155,12 +155,11 @@ mod ProofGatedPayment {
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
     use core::num::traits::Zero;
-    use core::poseidon::poseidon_hash_span;
 
     // Import interfaces for cross-contract calls
     use sage_contracts::interfaces::proof_verifier::{
         IProofVerifierDispatcher, IProofVerifierDispatcherTrait,
-        ProofJobId, ProofStatus
+        ProofJobId
     };
     use sage_contracts::payments::payment_router::{
         IPaymentRouterDispatcher, IPaymentRouterDispatcherTrait
