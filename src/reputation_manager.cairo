@@ -37,6 +37,11 @@ const INACTIVITY_DECAY: i32 = -5;
 // Rate limiting (minimum seconds between updates for same worker)
 const MIN_UPDATE_INTERVAL: u64 = 60; // 1 minute
 
+// Default decay configuration
+const DEFAULT_DECAY_PERIOD_SECS: u64 = 604800; // 7 days of inactivity before decay
+const DEFAULT_DECAY_POINTS_PER_PERIOD: u32 = 5; // 5 points per decay period
+const MAX_DECAY_PERIODS: u64 = 20; // Cap decay at 20 periods to prevent excessive penalties
+
 #[starknet::contract]
 pub mod ReputationManager {
     use super::{
@@ -45,6 +50,7 @@ pub mod ReputationManager {
         get_block_timestamp, StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map,
         MIN_SCORE, MAX_SCORE, INITIAL_SCORE, INITIAL_LEVEL,
+        DEFAULT_DECAY_PERIOD_SECS, DEFAULT_DECAY_POINTS_PER_PERIOD, MAX_DECAY_PERIODS,
         Zero
     };
 
@@ -52,6 +58,8 @@ pub mod ReputationManager {
     struct Storage {
         // Admin and authorized contracts
         admin: ContractAddress,
+        pending_admin: ContractAddress,  // Two-step admin transfer
+        paused: bool,                     // Pausable
         cdc_pool: ContractAddress,
         job_manager: ContractAddress,
 
@@ -83,6 +91,11 @@ pub mod ReputationManager {
         // History tracking (limited to last N events per worker)
         worker_history_count: Map<felt252, u32>,
         // Note: Full history would require off-chain indexing via events
+
+        // Decay configuration (Phase 2: On-chain decay)
+        decay_period_secs: u64,          // Inactivity period before decay starts
+        decay_points_per_period: u32,    // Points to deduct per decay period
+        last_decay_applied: Map<felt252, u64>, // Last time decay was applied to worker
     }
 
     #[event]
@@ -93,6 +106,55 @@ pub mod ReputationManager {
         ThresholdSet: ThresholdSet,
         AdminAdjusted: AdminAdjusted,
         InactivityDecayApplied: InactivityDecayApplied,
+        WorkerDecayed: WorkerDecayed,
+        DecayConfigUpdated: DecayConfigUpdated,
+        AdminTransferStarted: AdminTransferStarted,
+        AdminTransferred: AdminTransferred,
+        ContractPaused: ContractPaused,
+        ContractUnpaused: ContractUnpaused,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct AdminTransferStarted {
+        #[key]
+        pub previous_admin: ContractAddress,
+        #[key]
+        pub new_admin: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct AdminTransferred {
+        #[key]
+        pub previous_admin: ContractAddress,
+        #[key]
+        pub new_admin: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct ContractPaused {
+        pub account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct ContractUnpaused {
+        pub account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct WorkerDecayed {
+        #[key]
+        pub worker_id: felt252,
+        pub old_score: u32,
+        pub new_score: u32,
+        pub decay_periods: u64,
+        pub timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct DecayConfigUpdated {
+        pub decay_period_secs: u64,
+        pub decay_points_per_period: u32,
+        pub timestamp: u64,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -161,6 +223,10 @@ pub mod ReputationManager {
         self.total_score_sum.write(0);
         self.highest_score.write(0);
         self.lowest_score.write(MAX_SCORE);
+
+        // Initialize decay configuration with defaults
+        self.decay_period_secs.write(DEFAULT_DECAY_PERIOD_SECS);
+        self.decay_points_per_period.write(DEFAULT_DECAY_POINTS_PER_PERIOD);
     }
 
     #[abi(embed_v0)]
@@ -189,6 +255,7 @@ pub mod ReputationManager {
             self.worker_reputations.write(worker_id, initial_rep);
             self.worker_initialized.write(worker_id, true);
             self.worker_last_update.write(worker_id, current_time);
+            self.last_decay_applied.write(worker_id, current_time);
 
             // Update network stats
             let current_total = self.total_workers.read();
@@ -573,15 +640,133 @@ pub mod ReputationManager {
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Not authorized");
 
-            // Note: Full decay application requires off-chain worker enumeration
-            // This is a placeholder that emits an event for off-chain processing
+            // Process all levels in sequence
+            let mut total_affected: u32 = 0;
+
+            // Process each level (1-5)
+            let mut level: u8 = 1;
+            while level <= 5 {
+                let (_, affected) = self._apply_decay_for_level(level, 0, 100, cutoff_timestamp);
+                total_affected += affected;
+                level += 1;
+            };
+
             self.emit(InactivityDecayApplied {
-                workers_affected: 0, // Actual count determined off-chain
+                workers_affected: total_affected,
                 cutoff_timestamp,
                 timestamp: get_block_timestamp(),
             });
 
-            0 // Actual count determined off-chain
+            total_affected
+        }
+
+        fn apply_decay_batch(
+            ref self: ContractState,
+            level: u8,
+            start_index: u32,
+            batch_size: u32
+        ) -> (u32, u32) {
+            // Only admin can apply decay
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(level >= 1 && level <= 5, "Invalid level");
+
+            let current_time = get_block_timestamp();
+            let decay_period = self.decay_period_secs.read();
+            // Calculate cutoff: workers inactive longer than decay_period should be decayed
+            let cutoff = if current_time > decay_period {
+                current_time - decay_period
+            } else {
+                0
+            };
+
+            self._apply_decay_for_level(level, start_index, batch_size, cutoff)
+        }
+
+        fn get_reputation_with_decay(self: @ContractState, worker_id: felt252) -> ReputationScore {
+            // Return default for uninitialized workers
+            if !self.worker_initialized.read(worker_id) {
+                return ReputationScore {
+                    score: 0,
+                    level: 0,
+                    last_updated: 0,
+                    total_jobs_completed: 0,
+                    successful_jobs: 0,
+                    failed_jobs: 0,
+                    dispute_count: 0,
+                    slash_count: 0,
+                };
+            }
+
+            let rep = self.worker_reputations.read(worker_id);
+
+            // Calculate pending decay (view only, doesn't persist)
+            let current_time = get_block_timestamp();
+            let last_activity = rep.last_updated;
+            let decay_period = self.decay_period_secs.read();
+            let decay_points = self.decay_points_per_period.read();
+
+            if decay_period == 0 || current_time <= last_activity {
+                return rep;
+            }
+
+            let time_inactive = current_time - last_activity;
+            if time_inactive < decay_period {
+                return rep;
+            }
+
+            // Calculate number of decay periods elapsed
+            let decay_periods_elapsed: u64 = time_inactive / decay_period;
+            let capped_periods = if decay_periods_elapsed > MAX_DECAY_PERIODS {
+                MAX_DECAY_PERIODS
+            } else {
+                decay_periods_elapsed
+            };
+
+            // Calculate total decay
+            let total_decay: u32 = (capped_periods.try_into().unwrap_or(0_u32)) * decay_points;
+
+            // Apply decay to score
+            let new_score = if total_decay >= rep.score {
+                MIN_SCORE
+            } else {
+                rep.score - total_decay
+            };
+
+            // Return adjusted reputation (without persisting)
+            ReputationScore {
+                score: new_score,
+                level: self._calculate_level(new_score),
+                last_updated: rep.last_updated,
+                total_jobs_completed: rep.total_jobs_completed,
+                successful_jobs: rep.successful_jobs,
+                failed_jobs: rep.failed_jobs,
+                dispute_count: rep.dispute_count,
+                slash_count: rep.slash_count,
+            }
+        }
+
+        fn set_decay_config(
+            ref self: ContractState,
+            decay_period_secs: u64,
+            decay_points_per_period: u32
+        ) {
+            // Only admin can set decay config
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin can set decay config");
+
+            // Validate values
+            assert!(decay_period_secs >= 3600, "Decay period must be at least 1 hour");
+            assert!(decay_points_per_period <= 50, "Decay points too high");
+
+            self.decay_period_secs.write(decay_period_secs);
+            self.decay_points_per_period.write(decay_points_per_period);
+
+            self.emit(DecayConfigUpdated {
+                decay_period_secs,
+                decay_points_per_period,
+                timestamp: get_block_timestamp(),
+            });
         }
 
         fn set_reputation_threshold(
@@ -669,6 +854,71 @@ pub mod ReputationManager {
             };
 
             (total_workers, avg_score, highest_score, lowest_score)
+        }
+
+        // =========================================================================
+        // Two-Step Admin Transfer
+        // =========================================================================
+
+        fn transfer_admin(ref self: ContractState, new_admin: ContractAddress) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin");
+            assert!(!new_admin.is_zero(), "New admin cannot be zero");
+
+            let previous_admin = self.admin.read();
+            self.pending_admin.write(new_admin);
+
+            self.emit(AdminTransferStarted {
+                previous_admin,
+                new_admin,
+            });
+        }
+
+        fn accept_admin(ref self: ContractState) {
+            let caller = get_caller_address();
+            let pending = self.pending_admin.read();
+            assert!(caller == pending, "Caller is not pending admin");
+
+            let previous_admin = self.admin.read();
+            let zero: ContractAddress = 0.try_into().unwrap();
+
+            self.admin.write(caller);
+            self.pending_admin.write(zero);
+
+            self.emit(AdminTransferred {
+                previous_admin,
+                new_admin: caller,
+            });
+        }
+
+        fn admin(self: @ContractState) -> ContractAddress {
+            self.admin.read()
+        }
+
+        fn pending_admin(self: @ContractState) -> ContractAddress {
+            self.pending_admin.read()
+        }
+
+        // =========================================================================
+        // Pausable
+        // =========================================================================
+
+        fn pause(ref self: ContractState) {
+            assert!(get_caller_address() == self.admin.read(), "Only admin");
+            assert!(!self.paused.read(), "Already paused");
+            self.paused.write(true);
+            self.emit(ContractPaused { account: get_caller_address() });
+        }
+
+        fn unpause(ref self: ContractState) {
+            assert!(get_caller_address() == self.admin.read(), "Only admin");
+            assert!(self.paused.read(), "Not paused");
+            self.paused.write(false);
+            self.emit(ContractUnpaused { account: get_caller_address() });
+        }
+
+        fn is_paused(self: @ContractState) -> bool {
+            self.paused.read()
         }
     }
 
@@ -777,6 +1027,132 @@ pub mod ReputationManager {
             self.workers_count_by_level.write(new_level, new_level_count + 1);
             // Update worker's index to their new position
             self.worker_level_index.write(worker_id, new_level_count);
+        }
+
+        /// Apply decay for workers at a specific level in batches
+        /// Returns (workers_processed, workers_decayed)
+        fn _apply_decay_for_level(
+            ref self: ContractState,
+            level: u8,
+            start_index: u32,
+            batch_size: u32,
+            cutoff_timestamp: u64
+        ) -> (u32, u32) {
+            let level_count = self.workers_count_by_level.read(level);
+
+            // Cap batch_size to prevent excessive gas usage
+            let max_batch: u32 = if batch_size > 50 { 50 } else { batch_size };
+
+            // Calculate end index
+            let end_index = if start_index + max_batch > level_count {
+                level_count
+            } else {
+                start_index + max_batch
+            };
+
+            if start_index >= level_count {
+                return (0, 0);
+            }
+
+            let current_time = get_block_timestamp();
+            let decay_period = self.decay_period_secs.read();
+            let decay_points = self.decay_points_per_period.read();
+
+            if decay_period == 0 {
+                return (0, 0);
+            }
+
+            let mut workers_processed: u32 = 0;
+            let mut workers_decayed: u32 = 0;
+            let mut i: u32 = start_index;
+
+            while i < end_index {
+                let worker_id = self.workers_by_level.read((level, i));
+                if worker_id != 0 {
+                    workers_processed += 1;
+
+                    let rep = self.worker_reputations.read(worker_id);
+                    let last_activity = rep.last_updated;
+
+                    // Only decay if worker was inactive before cutoff
+                    if last_activity < cutoff_timestamp && last_activity > 0 {
+                        let time_inactive = current_time - last_activity;
+                        let decay_periods_elapsed: u64 = time_inactive / decay_period;
+
+                        if decay_periods_elapsed > 0 {
+                            // Cap decay periods
+                            let capped_periods = if decay_periods_elapsed > MAX_DECAY_PERIODS {
+                                MAX_DECAY_PERIODS
+                            } else {
+                                decay_periods_elapsed
+                            };
+
+                            // Check if already decayed for these periods
+                            let last_decay_time = self.last_decay_applied.read(worker_id);
+                            let periods_since_last_decay = if current_time > last_decay_time {
+                                (current_time - last_decay_time) / decay_period
+                            } else {
+                                0
+                            };
+
+                            if periods_since_last_decay > 0 {
+                                // Calculate total decay to apply
+                                let periods_to_apply = if periods_since_last_decay > capped_periods {
+                                    capped_periods
+                                } else {
+                                    periods_since_last_decay
+                                };
+
+                                let total_decay: u32 = (periods_to_apply.try_into().unwrap_or(0_u32)) * decay_points;
+                                let old_score = rep.score;
+
+                                // Calculate new score
+                                let new_score = if total_decay >= old_score {
+                                    MIN_SCORE
+                                } else {
+                                    old_score - total_decay
+                                };
+
+                                if new_score != old_score {
+                                    // Update reputation
+                                    let old_level = rep.level;
+                                    let new_level = self._calculate_level(new_score);
+
+                                    let mut updated_rep = rep;
+                                    updated_rep.score = new_score;
+                                    updated_rep.level = new_level;
+                                    // Don't update last_updated - that tracks activity, not decay
+
+                                    self.worker_reputations.write(worker_id, updated_rep);
+                                    self.last_decay_applied.write(worker_id, current_time);
+
+                                    // Update network stats
+                                    self._update_network_stats(old_score, new_score);
+
+                                    // Update level tracking if changed
+                                    if old_level != new_level {
+                                        self._update_level_tracking(worker_id, old_level, new_level);
+                                    }
+
+                                    // Emit event for this worker
+                                    self.emit(WorkerDecayed {
+                                        worker_id,
+                                        old_score,
+                                        new_score,
+                                        decay_periods: periods_to_apply,
+                                        timestamp: current_time,
+                                    });
+
+                                    workers_decayed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            };
+
+            (workers_processed, workers_decayed)
         }
     }
 }

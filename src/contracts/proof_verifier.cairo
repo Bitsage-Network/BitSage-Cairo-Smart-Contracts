@@ -92,6 +92,15 @@ mod ProofVerifier {
         job_verified_at: Map<u256, u64>,
         job_worker: Map<u256, felt252>,  // Track which worker submitted proof
 
+        // Pending job queue - indexed by proof type
+        // pending_jobs_by_type: (proof_type_u8, index) -> job_id
+        pending_jobs_by_type: Map<(u8, u32), u256>,
+        pending_job_count_by_type: Map<u8, u32>,
+        // Reverse mapping: job_id -> (proof_type, index) for O(1) removal
+        job_pending_index: Map<u256, (u8, u32)>,
+        // Track if a job is in the pending queue
+        job_in_pending_queue: Map<u256, bool>,
+
         // TEE/Enclave security
         whitelisted_enclaves: Map<felt252, bool>,
         enclave_whitelist_count: u32,
@@ -123,8 +132,24 @@ mod ProofVerifier {
             spec: ProofJobSpec
         ) -> ProofJobId {
             let job_id = spec.job_id;
-            self.jobs.write(job_id.value, spec);
-            self.job_status.write(job_id.value, ProofStatus::Pending);
+            let job_id_value = job_id.value;
+
+            // Store the job
+            self.jobs.write(job_id_value, spec);
+            self.job_status.write(job_id_value, ProofStatus::Pending);
+
+            // Add to pending queue by proof type
+            let proof_type_u8: u8 = self._proof_type_to_u8(spec.proof_type);
+            let current_count = self.pending_job_count_by_type.read(proof_type_u8);
+
+            // Add job to the end of the queue for this proof type
+            self.pending_jobs_by_type.write((proof_type_u8, current_count), job_id_value);
+            self.pending_job_count_by_type.write(proof_type_u8, current_count + 1);
+
+            // Store reverse mapping for O(1) removal
+            self.job_pending_index.write(job_id_value, (proof_type_u8, current_count));
+            self.job_in_pending_queue.write(job_id_value, true);
+
             job_id
         }
 
@@ -140,10 +165,34 @@ mod ProofVerifier {
             proof_type: ProofType,
             max_count: u32
         ) -> Array<ProofJobId> {
-            // TODO: Implement proper pending queue with indexing
-            let _ = proof_type;
-            let _ = max_count;
-            ArrayTrait::<ProofJobId>::new()
+            let mut result: Array<ProofJobId> = ArrayTrait::new();
+            let proof_type_u8 = self._proof_type_to_u8(proof_type);
+            let total_count = self.pending_job_count_by_type.read(proof_type_u8);
+
+            // Return up to max_count pending jobs
+            let limit = if max_count < total_count { max_count } else { total_count };
+            let mut i: u32 = 0;
+            let mut found: u32 = 0;
+
+            // Iterate through the queue and return jobs that are still pending
+            while i < total_count && found < limit {
+                let job_id_value = self.pending_jobs_by_type.read((proof_type_u8, i));
+
+                // Only include if job is still in pending queue and status is pending
+                if self.job_in_pending_queue.read(job_id_value) {
+                    let status = self.job_status.read(job_id_value);
+                    match status {
+                        ProofStatus::Pending => {
+                            result.append(ProofJobId { value: job_id_value });
+                            found += 1;
+                        },
+                        _ => {}
+                    };
+                }
+                i += 1;
+            };
+
+            result
         }
 
         fn cancel_proof_job(
@@ -159,6 +208,9 @@ mod ProofVerifier {
                 'Only owner can cancel'
             );
 
+            // Remove from pending queue
+            self._remove_from_pending_queue(job_id.value);
+
             self.job_status.write(job_id.value, ProofStatus::Expired);
         }
 
@@ -172,6 +224,9 @@ mod ProofVerifier {
 
             let attestation_len = ArrayTrait::len(@submission.attestation_signature);
             assert(attestation_len > 0, 'Missing attestation');
+
+            // Remove job from pending queue (regardless of verification outcome)
+            self._remove_from_pending_queue(submission.job_id.value);
 
             // Verify the proof using STWO verification logic
             let verification_result = self._verify_stwo_proof(
@@ -235,6 +290,9 @@ mod ProofVerifier {
                 });
                 return false;
             }
+
+            // Remove job from pending queue (regardless of verification outcome)
+            self._remove_from_pending_queue(job_id.value);
 
             // Compute proof hash from data
             let computed_hash = self._compute_proof_hash(@proof_data);
@@ -386,6 +444,32 @@ mod ProofVerifier {
     // =========================================================================
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        /// Convert ProofType enum to u8 for storage indexing
+        fn _proof_type_to_u8(self: @ContractState, proof_type: ProofType) -> u8 {
+            match proof_type {
+                ProofType::StarknetBatch => 0,
+                ProofType::RecursiveProof => 1,
+                ProofType::ZKMLInference => 2,
+                ProofType::CrossChainBridge => 3,
+                ProofType::ApplicationSpecific => 4,
+            }
+        }
+
+        /// Remove a job from the pending queue
+        fn _remove_from_pending_queue(ref self: ContractState, job_id_value: u256) {
+            // Check if job is in pending queue
+            if !self.job_in_pending_queue.read(job_id_value) {
+                return;
+            }
+
+            // Mark as removed from queue
+            self.job_in_pending_queue.write(job_id_value, false);
+
+            // Note: We don't actually remove from the array (would require expensive shifts)
+            // Instead, get_pending_jobs skips jobs that are no longer in pending state
+            // This is a gas-efficient lazy deletion strategy
+        }
+
         /// Verify STWO Circle STARK proof
         /// This implements the core verification logic for proofs generated by the STWO GPU backend
         fn _verify_stwo_proof(

@@ -148,10 +148,36 @@ pub trait IReputationManager<TContractState> {
     /// @return: Total count of workers at that level
     fn get_workers_count_by_level(self: @TContractState, level: u8) -> u32;
     
-    /// Apply reputation decay for inactive workers
+    /// Apply reputation decay for inactive workers (batch processing)
     /// @param cutoff_timestamp: Workers inactive since this time will have decay applied
     /// @return: Number of workers affected
     fn apply_inactivity_decay(ref self: TContractState, cutoff_timestamp: u64) -> u32;
+
+    /// Apply inactivity decay in batches for gas efficiency (admin only)
+    /// @param level: Reputation level to process
+    /// @param start_index: Starting index in the level's worker list
+    /// @param batch_size: Number of workers to process in this batch
+    /// @return: (workers_processed, workers_decayed)
+    fn apply_decay_batch(
+        ref self: TContractState,
+        level: u8,
+        start_index: u32,
+        batch_size: u32
+    ) -> (u32, u32);
+
+    /// Get reputation with lazy decay applied (view function)
+    /// @param worker_id: Worker to query
+    /// @return: Reputation score with any pending decay applied
+    fn get_reputation_with_decay(self: @TContractState, worker_id: felt252) -> ReputationScore;
+
+    /// Set decay configuration (admin only)
+    /// @param decay_period_secs: Inactivity period before decay starts (seconds)
+    /// @param decay_points_per_period: Points to deduct per decay period
+    fn set_decay_config(
+        ref self: TContractState,
+        decay_period_secs: u64,
+        decay_points_per_period: u32
+    );
     
     /// Set reputation threshold for job types (admin only)
     /// @param job_type: Type of job
@@ -176,4 +202,33 @@ pub trait IReputationManager<TContractState> {
     /// Get reputation statistics for the network
     /// @return: Network-wide reputation statistics
     fn get_network_stats(self: @TContractState) -> (u32, u32, u32, u32); // (total_workers, avg_score, highest_score, lowest_score)
+
+    // =========================================================================
+    // Two-Step Admin Transfer
+    // =========================================================================
+
+    /// Start admin transfer (current admin only)
+    fn transfer_admin(ref self: TContractState, new_admin: starknet::ContractAddress);
+
+    /// Accept admin role (pending admin only)
+    fn accept_admin(ref self: TContractState);
+
+    /// Get current admin
+    fn admin(self: @TContractState) -> starknet::ContractAddress;
+
+    /// Get pending admin
+    fn pending_admin(self: @TContractState) -> starknet::ContractAddress;
+
+    // =========================================================================
+    // Pausable
+    // =========================================================================
+
+    /// Pause the contract (admin only)
+    fn pause(ref self: TContractState);
+
+    /// Unpause the contract (admin only)
+    fn unpause(ref self: TContractState);
+
+    /// Check if contract is paused
+    fn is_paused(self: @TContractState) -> bool;
 } 

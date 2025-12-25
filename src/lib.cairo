@@ -44,6 +44,7 @@ pub mod contracts {
     pub mod staking;
     pub mod gamification;
     pub mod fraud_proof;
+    pub mod achievement_nft;
 }
 
 pub mod obelysk;

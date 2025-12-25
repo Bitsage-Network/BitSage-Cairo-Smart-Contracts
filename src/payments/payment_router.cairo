@@ -179,6 +179,91 @@ pub trait IPaymentRouter<TContractState> {
 
     /// Get worker's public key
     fn get_worker_public_key(self: @TContractState, worker: ContractAddress) -> ECPoint;
+
+    // =========================================================================
+    // Two-Step Ownership Transfer
+    // =========================================================================
+
+    /// Start ownership transfer (current owner only)
+    fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
+
+    /// Accept ownership (pending owner only)
+    fn accept_ownership(ref self: TContractState);
+
+    /// Cancel pending ownership transfer (current owner only)
+    fn cancel_ownership_transfer(ref self: TContractState);
+
+    /// Get current owner
+    fn owner(self: @TContractState) -> ContractAddress;
+
+    /// Get pending owner
+    fn pending_owner(self: @TContractState) -> ContractAddress;
+
+    // =========================================================================
+    // Pausable
+    // =========================================================================
+
+    /// Pause the contract (owner only)
+    fn pause(ref self: TContractState);
+
+    /// Unpause the contract (owner only)
+    fn unpause(ref self: TContractState);
+
+    /// Check if contract is paused
+    fn is_paused(self: @TContractState) -> bool;
+
+    // =========================================================================
+    // Rate Limiting
+    // =========================================================================
+
+    /// Admin: Set rate limit configuration
+    /// @param window_secs: Duration of rate limit window in seconds
+    /// @param max_payments: Maximum number of payments allowed per window
+    fn set_rate_limit(ref self: TContractState, window_secs: u64, max_payments: u32);
+
+    /// Get current rate limit configuration
+    fn get_rate_limit(self: @TContractState) -> (u64, u32);
+
+    /// Get user's current payment count in window
+    fn get_user_payment_count(self: @TContractState, user: ContractAddress) -> u32;
+
+    // =========================================================================
+    // Timelock for Critical Parameter Changes
+    // =========================================================================
+
+    /// Propose a new fee distribution (starts timelock)
+    fn propose_fee_distribution(ref self: TContractState, distribution: FeeDistribution);
+
+    /// Execute pending fee distribution (after timelock expires)
+    fn execute_fee_distribution(ref self: TContractState);
+
+    /// Cancel pending fee distribution
+    fn cancel_fee_distribution(ref self: TContractState);
+
+    /// Get pending fee distribution and execution timestamp
+    fn get_pending_fee_distribution(self: @TContractState) -> (FeeDistribution, u64);
+
+    /// Get current timelock delay
+    fn get_timelock_delay(self: @TContractState) -> u64;
+
+    /// Set timelock delay (owner only, immediate change)
+    fn set_timelock_delay(ref self: TContractState, delay: u64);
+
+    // =========================================================================
+    // Emergency Withdrawal (when paused)
+    // =========================================================================
+
+    /// Emergency withdraw ERC20 tokens (owner only, requires paused state)
+    /// Use only in emergencies when funds need to be recovered
+    fn emergency_withdraw(
+        ref self: TContractState,
+        token: ContractAddress,
+        recipient: ContractAddress,
+        amount: u256
+    );
+
+    /// Get treasury balances
+    fn get_treasury_balances(self: @TContractState) -> (u256, u256, u256, u256);
 }
 
 #[starknet::contract]
@@ -212,9 +297,16 @@ mod PaymentRouter {
     const USD_DECIMALS: u256 = 1000000000000000000; // 10^18
     const BPS_DENOMINATOR: u256 = 10000;
 
+    // Timelock constants
+    const DEFAULT_TIMELOCK_DELAY: u64 = 172800; // 48 hours in seconds
+    const MIN_TIMELOCK_DELAY: u64 = 3600;       // 1 hour minimum
+    const MAX_TIMELOCK_DELAY: u64 = 604800;     // 7 days maximum
+
     #[storage]
     struct Storage {
         owner: ContractAddress,
+        pending_owner: ContractAddress,  // Two-step ownership transfer
+        paused: bool,                     // Emergency pause
         otc_config: OTCConfig,
         fee_distribution: FeeDistribution,
         discount_tiers: DiscountTiers,
@@ -249,6 +341,12 @@ mod PaymentRouter {
         // Worker public keys for privacy payments
         worker_public_keys: Map<ContractAddress, ECPoint>,
 
+        // Rate limiting (per-user)
+        user_last_payment_window_start: Map<ContractAddress, u64>,
+        user_payment_count_in_window: Map<ContractAddress, u32>,
+        rate_limit_window_secs: u64,     // Rate limit window duration
+        max_payments_per_window: u32,    // Max payments allowed per window
+
         // Privacy payment randomness seed (incremented per payment)
         privacy_nonce: u256,
 
@@ -258,6 +356,14 @@ mod PaymentRouter {
         total_worker_payments: u256,
         total_staker_rewards: u256,
         total_treasury_collected: u256,
+
+        // Security: Reentrancy guard
+        reentrancy_locked: bool,
+
+        // Timelock for critical parameter changes (48 hours)
+        timelock_delay: u64,
+        pending_fee_distribution: FeeDistribution,
+        pending_fee_distribution_timestamp: u64,  // 0 means no pending change
     }
 
     #[event]
@@ -269,6 +375,147 @@ mod PaymentRouter {
         PrivacyPayment: PrivacyPayment,
         FeesDistributed: FeesDistributed,
         WorkerPaid: WorkerPaid,
+        OwnershipTransferStarted: OwnershipTransferStarted,
+        OwnershipTransferred: OwnershipTransferred,
+        ContractPaused: ContractPaused,
+        ContractUnpaused: ContractUnpaused,
+        RateLimitUpdated: RateLimitUpdated,
+        DiscountTiersUpdated: DiscountTiersUpdated,
+        FeeDistributionUpdated: FeeDistributionUpdated,
+        OTCConfigUpdated: OTCConfigUpdated,
+        ObelyskRouterUpdated: ObelyskRouterUpdated,
+        StakerRewardsPoolUpdated: StakerRewardsPoolUpdated,
+        JobRegistered: JobRegistered,
+        FeeDistributionProposed: FeeDistributionProposed,
+        FeeDistributionExecuted: FeeDistributionExecuted,
+        FeeDistributionCancelled: FeeDistributionCancelled,
+        TimelockDelayUpdated: TimelockDelayUpdated,
+        EmergencyWithdrawal: EmergencyWithdrawal,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct EmergencyWithdrawal {
+        #[key]
+        token: ContractAddress,
+        #[key]
+        recipient: ContractAddress,
+        amount: u256,
+        withdrawn_by: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct FeeDistributionProposed {
+        #[key]
+        proposed_by: ContractAddress,
+        worker_bps: u32,
+        protocol_fee_bps: u32,
+        executable_at: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct FeeDistributionExecuted {
+        #[key]
+        executed_by: ContractAddress,
+        worker_bps: u32,
+        protocol_fee_bps: u32,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct FeeDistributionCancelled {
+        #[key]
+        cancelled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct TimelockDelayUpdated {
+        old_delay: u64,
+        new_delay: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct OwnershipTransferStarted {
+        #[key]
+        previous_owner: ContractAddress,
+        #[key]
+        new_owner: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct OwnershipTransferred {
+        #[key]
+        previous_owner: ContractAddress,
+        #[key]
+        new_owner: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractPaused {
+        account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractUnpaused {
+        account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct RateLimitUpdated {
+        window_secs: u64,
+        max_payments: u32,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct DiscountTiersUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        sage_discount_bps: u32,
+        staked_sage_discount_bps: u32,
+        privacy_credit_discount_bps: u32,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct FeeDistributionUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        worker_bps: u32,
+        protocol_fee_bps: u32,
+        burn_share_bps: u32,
+        treasury_share_bps: u32,
+        staker_share_bps: u32,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct OTCConfigUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        quote_validity_seconds: u64,
+        max_slippage_bps: u32,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ObelyskRouterUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        old_router: ContractAddress,
+        new_router: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct StakerRewardsPoolUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        old_pool: ContractAddress,
+        new_pool: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct JobRegistered {
+        #[key]
+        job_id: u256,
+        #[key]
+        worker: ContractAddress,
+        privacy_enabled: bool,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -387,6 +634,13 @@ mod PaymentRouter {
         self.discount_tiers.write(discounts);
 
         self.quote_counter.write(0);
+
+        // Initialize rate limiting: 1 hour window, 20 payments max
+        self.rate_limit_window_secs.write(3600);
+        self.max_payments_per_window.write(20);
+
+        // Initialize timelock delay (48 hours)
+        self.timelock_delay.write(DEFAULT_TIMELOCK_DELAY);
     }
 
     #[abi(embed_v0)]
@@ -431,8 +685,16 @@ mod PaymentRouter {
             quote_id: u256,
             job_id: u256
         ) -> bool {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
+            // SECURITY: Pause check
+            self._when_not_paused();
+
             let caller = get_caller_address();
             let now = get_block_timestamp();
+
+            // SECURITY: Rate limit check
+            self._check_rate_limit(caller);
 
             // Verify quote exists and belongs to caller
             let quote = self.quotes.read(quote_id);
@@ -442,20 +704,22 @@ mod PaymentRouter {
             assert(quote_owner == caller, 'Not quote owner');
             assert(now <= quote.expires_at, 'Quote expired');
 
-            // Mark quote as used
+            // CHECKS-EFFECTS-INTERACTIONS pattern:
+            // 1. Mark quote as used BEFORE external calls
             let mut used_quote = quote;
             used_quote.is_valid = false;
             self.quotes.write(quote_id, used_quote);
 
+            // 2. Update stats BEFORE external calls
+            let total_usd = self.total_payments_usd.read();
+            self.total_payments_usd.write(total_usd + quote.usd_value);
+
+            // 3. INTERACTIONS: External calls LAST
             // Transfer payment token from user
             self._collect_payment(caller, quote.payment_token, quote.payment_amount);
 
             // Distribute fees in SAGE
             self._distribute_fees(quote.sage_equivalent, job_id);
-
-            // Update stats
-            let total_usd = self.total_payments_usd.read();
-            self.total_payments_usd.write(total_usd + quote.usd_value);
 
             self.emit(PaymentExecuted {
                 quote_id,
@@ -467,6 +731,9 @@ mod PaymentRouter {
                 usd_value: quote.usd_value,
             });
 
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
+
             true
         }
 
@@ -475,22 +742,32 @@ mod PaymentRouter {
             amount: u256,
             job_id: u256
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
+            // SECURITY: Pause check
+            self._when_not_paused();
+
             let caller = get_caller_address();
+
+            // SECURITY: Rate limit check
+            self._check_rate_limit(caller);
+
             let discounts = self.discount_tiers.read();
 
             // Direct SAGE payment gets discount
             let effective_amount = (amount * (BPS_DENOMINATOR + discounts.sage_discount_bps.into())) / BPS_DENOMINATOR;
 
+            // CHECKS-EFFECTS-INTERACTIONS: Update stats BEFORE external calls
+            let usd_value = (amount * BASE_SAGE_PRICE_USD) / USD_DECIMALS;
+            let total_usd = self.total_payments_usd.read();
+            self.total_payments_usd.write(total_usd + usd_value);
+
+            // INTERACTIONS: External calls LAST
             // Transfer SAGE from user
             self._collect_payment(caller, PaymentToken::SAGE, amount);
 
             // Distribute fees
             self._distribute_fees(effective_amount, job_id);
-
-            // Calculate USD value for stats
-            let usd_value = (amount * BASE_SAGE_PRICE_USD) / USD_DECIMALS;
-            let total_usd = self.total_payments_usd.read();
-            self.total_payments_usd.write(total_usd + usd_value);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -501,6 +778,9 @@ mod PaymentRouter {
                 sage_equivalent: effective_amount,
                 usd_value,
             });
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn pay_with_staked_sage(
@@ -508,7 +788,16 @@ mod PaymentRouter {
             usd_amount: u256,
             job_id: u256
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
+            // SECURITY: Pause check
+            self._when_not_paused();
+
             let caller = get_caller_address();
+
+            // SECURITY: Rate limit check
+            self._check_rate_limit(caller);
+
             let discounts = self.discount_tiers.read();
 
             // Calculate discounted amount (10% off)
@@ -517,20 +806,16 @@ mod PaymentRouter {
             // Convert to SAGE at current price
             let sage_amount = (discounted_usd * USD_DECIMALS) / BASE_SAGE_PRICE_USD;
 
-            // Verify user has sufficient staked balance
-            // Note: This would interact with the staking contract
+            // CHECKS-EFFECTS-INTERACTIONS: Update state BEFORE external calls
             let credits_used = self.staked_credits_used.read(caller);
-            // In production: check staking contract for available balance
-
-            // Record credit usage
             self.staked_credits_used.write(caller, credits_used + sage_amount);
 
-            // Distribute fees (from protocol reserves, not user transfer)
-            self._distribute_fees(sage_amount, job_id);
-
-            // Update stats
             let total_usd = self.total_payments_usd.read();
             self.total_payments_usd.write(total_usd + usd_amount);
+
+            // INTERACTIONS: External calls LAST
+            // Distribute fees (from protocol reserves, not user transfer)
+            self._distribute_fees(sage_amount, job_id);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -541,6 +826,9 @@ mod PaymentRouter {
                 sage_equivalent: sage_amount,
                 usd_value: usd_amount,
             });
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn deposit_privacy_credits(
@@ -548,6 +836,9 @@ mod PaymentRouter {
             amount: u256,
             commitment: felt252
         ) {
+            // SECURITY: Pause check
+            self._when_not_paused();
+
             let caller = get_caller_address();
 
             // Verify commitment not already used
@@ -572,6 +863,9 @@ mod PaymentRouter {
             nullifier: felt252,
             proof: Array<felt252>
         ) {
+            // SECURITY: Pause check
+            self._when_not_paused();
+
             // Verify nullifier not already used (prevent double-spend)
             assert(!self.privacy_nullifiers.read(nullifier), 'Nullifier used');
 
@@ -618,40 +912,82 @@ mod PaymentRouter {
             assert(tiers.staked_sage_discount_bps <= 5000, 'Discount too high');
 
             self.discount_tiers.write(tiers);
+
+            self.emit(DiscountTiersUpdated {
+                updated_by: get_caller_address(),
+                sage_discount_bps: tiers.sage_discount_bps,
+                staked_sage_discount_bps: tiers.staked_sage_discount_bps,
+                privacy_credit_discount_bps: tiers.privacy_credit_discount_bps,
+            });
         }
 
+        /// Emergency-only direct fee distribution change (bypasses timelock)
+        /// Only works when contract is paused. For normal changes, use propose_fee_distribution.
         fn set_fee_distribution(ref self: ContractState, distribution: FeeDistribution) {
             self._only_owner();
 
+            // SECURITY: Only allow direct changes in emergency mode (when paused)
+            // For normal changes, use propose_fee_distribution with timelock
+            assert!(self.paused.read(), "Use propose_fee_distribution for normal changes");
+
             // Validate: worker + protocol must equal 100%
             let total_split = distribution.worker_bps + distribution.protocol_fee_bps;
-            assert(total_split == 10000, 'Worker+Protocol must be 100%');
+            assert!(total_split == 10000, "Worker+Protocol must be 100%");
 
             // Validate: protocol fee shares must sum to 100%
             let protocol_shares = distribution.burn_share_bps
                 + distribution.treasury_share_bps
                 + distribution.staker_share_bps;
-            assert(protocol_shares == 10000, 'Fee shares must sum to 100%');
+            assert!(protocol_shares == 10000, "Fee shares must sum to 100%");
 
             // Validate: worker must get at least 50% (prevent abuse)
-            assert(distribution.worker_bps >= 5000, 'Worker share too low');
+            assert!(distribution.worker_bps >= 5000, "Worker share too low");
 
             self.fee_distribution.write(distribution);
+
+            self.emit(FeeDistributionUpdated {
+                updated_by: get_caller_address(),
+                worker_bps: distribution.worker_bps,
+                protocol_fee_bps: distribution.protocol_fee_bps,
+                burn_share_bps: distribution.burn_share_bps,
+                treasury_share_bps: distribution.treasury_share_bps,
+                staker_share_bps: distribution.staker_share_bps,
+            });
         }
 
         fn set_otc_config(ref self: ContractState, config: OTCConfig) {
             self._only_owner();
             self.otc_config.write(config);
+
+            self.emit(OTCConfigUpdated {
+                updated_by: get_caller_address(),
+                quote_validity_seconds: config.quote_validity_seconds,
+                max_slippage_bps: config.max_slippage_bps,
+            });
         }
 
         fn set_obelysk_router(ref self: ContractState, router: ContractAddress) {
             self._only_owner();
+            let old_router = self.obelysk_router.read();
             self.obelysk_router.write(router);
+
+            self.emit(ObelyskRouterUpdated {
+                updated_by: get_caller_address(),
+                old_router,
+                new_router: router,
+            });
         }
 
         fn set_staker_rewards_pool(ref self: ContractState, pool: ContractAddress) {
             self._only_owner();
+            let old_pool = self.staker_rewards_pool.read();
             self.staker_rewards_pool.write(pool);
+
+            self.emit(StakerRewardsPoolUpdated {
+                updated_by: get_caller_address(),
+                old_pool,
+                new_pool: pool,
+            });
         }
 
         fn register_job(
@@ -666,6 +1002,12 @@ mod PaymentRouter {
 
             self.job_worker.write(job_id, worker);
             self.job_privacy_enabled.write(job_id, privacy_enabled);
+
+            self.emit(JobRegistered {
+                job_id,
+                worker,
+                privacy_enabled,
+            });
         }
 
         fn get_stats(self: @ContractState) -> (u256, u256, u256, u256, u256) {
@@ -694,12 +1036,318 @@ mod PaymentRouter {
         fn get_worker_public_key(self: @ContractState, worker: ContractAddress) -> ECPoint {
             self.worker_public_keys.read(worker)
         }
+
+        // =========================================================================
+        // Two-Step Ownership Transfer
+        // =========================================================================
+
+        fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
+            self._only_owner();
+            assert!(!new_owner.is_zero(), "New owner cannot be zero address");
+
+            let previous_owner = self.owner.read();
+            self.pending_owner.write(new_owner);
+
+            self.emit(OwnershipTransferStarted {
+                previous_owner,
+                new_owner,
+            });
+        }
+
+        fn accept_ownership(ref self: ContractState) {
+            let caller = get_caller_address();
+            let pending = self.pending_owner.read();
+            assert!(caller == pending, "Caller is not pending owner");
+
+            let previous_owner = self.owner.read();
+            let zero: ContractAddress = 0.try_into().unwrap();
+
+            self.owner.write(caller);
+            self.pending_owner.write(zero);
+
+            self.emit(OwnershipTransferred {
+                previous_owner,
+                new_owner: caller,
+            });
+        }
+
+        fn cancel_ownership_transfer(ref self: ContractState) {
+            self._only_owner();
+            let zero: ContractAddress = 0.try_into().unwrap();
+            self.pending_owner.write(zero);
+        }
+
+        fn owner(self: @ContractState) -> ContractAddress {
+            self.owner.read()
+        }
+
+        fn pending_owner(self: @ContractState) -> ContractAddress {
+            self.pending_owner.read()
+        }
+
+        // =========================================================================
+        // Pausable
+        // =========================================================================
+
+        fn pause(ref self: ContractState) {
+            self._only_owner();
+            assert!(!self.paused.read(), "Contract already paused");
+            self.paused.write(true);
+            self.emit(ContractPaused { account: get_caller_address() });
+        }
+
+        fn unpause(ref self: ContractState) {
+            self._only_owner();
+            assert!(self.paused.read(), "Contract not paused");
+            self.paused.write(false);
+            self.emit(ContractUnpaused { account: get_caller_address() });
+        }
+
+        fn is_paused(self: @ContractState) -> bool {
+            self.paused.read()
+        }
+
+        // =========================================================================
+        // Rate Limiting
+        // =========================================================================
+
+        fn set_rate_limit(ref self: ContractState, window_secs: u64, max_payments: u32) {
+            self._only_owner();
+
+            // Validate: window must be at least 1 minute
+            assert!(window_secs >= 60, "Window must be at least 60 seconds");
+            // Validate: max payments must be at least 1
+            assert!(max_payments >= 1, "Max payments must be at least 1");
+            // Validate: window cannot exceed 1 day
+            assert!(window_secs <= 86400, "Window cannot exceed 24 hours");
+
+            self.rate_limit_window_secs.write(window_secs);
+            self.max_payments_per_window.write(max_payments);
+
+            self.emit(RateLimitUpdated {
+                window_secs,
+                max_payments,
+            });
+        }
+
+        fn get_rate_limit(self: @ContractState) -> (u64, u32) {
+            (self.rate_limit_window_secs.read(), self.max_payments_per_window.read())
+        }
+
+        fn get_user_payment_count(self: @ContractState, user: ContractAddress) -> u32 {
+            let now = get_block_timestamp();
+            let window_start = self.user_last_payment_window_start.read(user);
+            let window_duration = self.rate_limit_window_secs.read();
+
+            // If window has expired, count is effectively 0
+            if now >= window_start + window_duration {
+                0
+            } else {
+                self.user_payment_count_in_window.read(user)
+            }
+        }
+
+        // =========================================================================
+        // Timelock for Critical Parameter Changes
+        // =========================================================================
+
+        fn propose_fee_distribution(ref self: ContractState, distribution: FeeDistribution) {
+            self._only_owner();
+
+            // Validate: worker + protocol must equal 100%
+            let total_split = distribution.worker_bps + distribution.protocol_fee_bps;
+            assert!(total_split == 10000, "Worker+Protocol must be 100%");
+
+            // Validate: protocol fee shares must sum to 100%
+            let protocol_shares = distribution.burn_share_bps
+                + distribution.treasury_share_bps
+                + distribution.staker_share_bps;
+            assert!(protocol_shares == 10000, "Fee shares must sum to 100%");
+
+            // Validate: worker must get at least 50% (prevent abuse)
+            assert!(distribution.worker_bps >= 5000, "Worker share too low");
+
+            // Calculate execution timestamp
+            let now = get_block_timestamp();
+            let delay = self.timelock_delay.read();
+            let executable_at = now + delay;
+
+            // Store pending distribution
+            self.pending_fee_distribution.write(distribution);
+            self.pending_fee_distribution_timestamp.write(executable_at);
+
+            self.emit(FeeDistributionProposed {
+                proposed_by: get_caller_address(),
+                worker_bps: distribution.worker_bps,
+                protocol_fee_bps: distribution.protocol_fee_bps,
+                executable_at,
+            });
+        }
+
+        fn execute_fee_distribution(ref self: ContractState) {
+            self._only_owner();
+
+            let executable_at = self.pending_fee_distribution_timestamp.read();
+            assert!(executable_at > 0, "No pending fee distribution");
+
+            let now = get_block_timestamp();
+            assert!(now >= executable_at, "Timelock not expired");
+
+            // Get and apply pending distribution
+            let distribution = self.pending_fee_distribution.read();
+            self.fee_distribution.write(distribution);
+
+            // Clear pending state
+            self.pending_fee_distribution_timestamp.write(0);
+
+            self.emit(FeeDistributionExecuted {
+                executed_by: get_caller_address(),
+                worker_bps: distribution.worker_bps,
+                protocol_fee_bps: distribution.protocol_fee_bps,
+            });
+
+            // Also emit the standard update event for consistency
+            self.emit(FeeDistributionUpdated {
+                updated_by: get_caller_address(),
+                worker_bps: distribution.worker_bps,
+                protocol_fee_bps: distribution.protocol_fee_bps,
+                burn_share_bps: distribution.burn_share_bps,
+                treasury_share_bps: distribution.treasury_share_bps,
+                staker_share_bps: distribution.staker_share_bps,
+            });
+        }
+
+        fn cancel_fee_distribution(ref self: ContractState) {
+            self._only_owner();
+
+            let executable_at = self.pending_fee_distribution_timestamp.read();
+            assert!(executable_at > 0, "No pending fee distribution");
+
+            // Clear pending state
+            self.pending_fee_distribution_timestamp.write(0);
+
+            self.emit(FeeDistributionCancelled {
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_pending_fee_distribution(self: @ContractState) -> (FeeDistribution, u64) {
+            (self.pending_fee_distribution.read(), self.pending_fee_distribution_timestamp.read())
+        }
+
+        fn get_timelock_delay(self: @ContractState) -> u64 {
+            self.timelock_delay.read()
+        }
+
+        fn set_timelock_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+
+            // Validate: delay must be within bounds
+            assert!(delay >= MIN_TIMELOCK_DELAY, "Delay too short");
+            assert!(delay <= MAX_TIMELOCK_DELAY, "Delay too long");
+
+            let old_delay = self.timelock_delay.read();
+            self.timelock_delay.write(delay);
+
+            self.emit(TimelockDelayUpdated {
+                old_delay,
+                new_delay: delay,
+            });
+        }
+
+        // =========================================================================
+        // Emergency Withdrawal
+        // =========================================================================
+
+        fn emergency_withdraw(
+            ref self: ContractState,
+            token: ContractAddress,
+            recipient: ContractAddress,
+            amount: u256
+        ) {
+            self._only_owner();
+
+            // SECURITY: Only allow emergency withdrawal when contract is paused
+            assert!(self.paused.read(), "Contract must be paused for emergency withdrawal");
+
+            // Validate recipient
+            assert!(!recipient.is_zero(), "Invalid recipient");
+
+            // Validate amount
+            assert!(amount > 0, "Amount must be greater than 0");
+
+            // Transfer tokens
+            let token_dispatcher = IERC20Dispatcher { contract_address: token };
+            let success = token_dispatcher.transfer(recipient, amount);
+            assert!(success, "Emergency withdrawal transfer failed");
+
+            self.emit(EmergencyWithdrawal {
+                token,
+                recipient,
+                amount,
+                withdrawn_by: get_caller_address(),
+                timestamp: get_block_timestamp(),
+            });
+        }
+
+        fn get_treasury_balances(self: @ContractState) -> (u256, u256, u256, u256) {
+            (
+                self.treasury_usdc.read(),
+                self.treasury_strk.read(),
+                self.treasury_wbtc.read(),
+                self.treasury_sage.read()
+            )
+        }
     }
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        // =========================================================================
+        // Reentrancy Guard - Prevents reentrant calls to critical functions
+        // =========================================================================
+        fn _reentrancy_guard_start(ref self: ContractState) {
+            assert(!self.reentrancy_locked.read(), 'ReentrancyGuard: reentrant call');
+            self.reentrancy_locked.write(true);
+        }
+
+        fn _reentrancy_guard_end(ref self: ContractState) {
+            self.reentrancy_locked.write(false);
+        }
+
         fn _only_owner(self: @ContractState) {
             assert(get_caller_address() == self.owner.read(), 'Only owner');
+        }
+
+        fn _when_not_paused(self: @ContractState) {
+            assert!(!self.paused.read(), "Contract is paused");
+        }
+
+        /// Check and update rate limit for a user
+        /// Reverts if rate limit exceeded, otherwise increments the counter
+        fn _check_rate_limit(ref self: ContractState, user: ContractAddress) {
+            let now = get_block_timestamp();
+            let window_start = self.user_last_payment_window_start.read(user);
+            let window_duration = self.rate_limit_window_secs.read();
+            let max_payments = self.max_payments_per_window.read();
+
+            // Skip rate limiting if not configured (max_payments = 0)
+            if max_payments == 0 {
+                return;
+            }
+
+            // Check if we're in a new window
+            if now >= window_start + window_duration {
+                // Start a new window
+                self.user_last_payment_window_start.write(user, now);
+                self.user_payment_count_in_window.write(user, 1);
+            } else {
+                // Within current window - check limit
+                let current_count = self.user_payment_count_in_window.read(user);
+                assert!(current_count < max_payments, "Rate limit exceeded");
+
+                // Increment counter
+                self.user_payment_count_in_window.write(user, current_count + 1);
+            }
         }
 
         fn _get_discount_for_token(

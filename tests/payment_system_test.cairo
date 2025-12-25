@@ -271,9 +271,15 @@ fn test_worker_staking() {
     assert(worker_stake.amount == stake_amount, 'Wrong stake amount');
     assert(worker_stake.is_active, 'Should be active');
 
-    // Check eligibility
+    // Advance time past flash loan protection period (24 hours + 1 second)
+    // This is security feature: workers must wait before becoming eligible for jobs
+    start_cheat_block_timestamp_global(get_block_timestamp() + 86401);
+
+    // Check eligibility (now should pass after waiting period)
     let is_eligible = staking.is_eligible(worker);
     assert(is_eligible, 'Worker should be eligible');
+
+    stop_cheat_block_timestamp_global();
 
     // Check total staked
     let total = staking.total_staked();

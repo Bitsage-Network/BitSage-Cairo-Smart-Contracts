@@ -72,6 +72,9 @@ pub struct WorkerStake {
     pub total_slashed: u256,
     /// Pending rewards
     pub pending_rewards: u256,
+    /// SECURITY: Timestamp when worker becomes eligible for jobs (flash loan protection)
+    /// Workers must wait this period before being assigned jobs
+    pub eligible_at: u64,
 }
 
 /// Staking configuration
@@ -103,6 +106,9 @@ pub struct StakingConfig {
     pub reward_apy_bps: u16,
     /// Consecutive failures before major slash
     pub max_consecutive_failures: u8,
+    /// SECURITY: Minimum time to wait after staking before eligible for jobs (flash loan protection)
+    /// Default: 86400 (24 hours)
+    pub stake_eligibility_delay_secs: u64,
 }
 
 #[starknet::interface]
@@ -154,6 +160,31 @@ pub trait IProverStaking<TContractState> {
 
     /// Get total slashed amount
     fn total_slashed(self: @TContractState) -> u256;
+
+    // =========================================================================
+    // Pausable
+    // =========================================================================
+
+    /// Pause the contract (owner only)
+    fn pause(ref self: TContractState);
+
+    /// Unpause the contract (owner only)
+    fn unpause(ref self: TContractState);
+
+    /// Check if contract is paused
+    fn is_paused(self: @TContractState) -> bool;
+
+    // =========================================================================
+    // Emergency Operations
+    // =========================================================================
+
+    /// Emergency withdraw tokens (owner only, requires paused state)
+    fn emergency_withdraw(
+        ref self: TContractState,
+        token: ContractAddress,
+        recipient: ContractAddress,
+        amount: u256
+    );
 }
 
 #[starknet::contract]
@@ -170,6 +201,7 @@ mod ProverStaking {
         Map,
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use core::num::traits::Zero;
 
     #[storage]
     struct Storage {
@@ -209,6 +241,39 @@ mod ProverStaking {
         RewardsClaimed: RewardsClaimed,
         SuccessRecorded: SuccessRecorded,
         ConfigUpdated: ConfigUpdated,
+        ContractAddressUpdated: ContractAddressUpdated,
+        ContractPaused: ContractPaused,
+        ContractUnpaused: ContractUnpaused,
+        EmergencyWithdrawal: EmergencyWithdrawal,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractPaused {
+        account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractUnpaused {
+        account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct EmergencyWithdrawal {
+        #[key]
+        token: ContractAddress,
+        #[key]
+        recipient: ContractAddress,
+        amount: u256,
+        withdrawn_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractAddressUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        contract_type: felt252, // 'optimistic_tee', 'verifier', 'job_manager'
+        old_address: ContractAddress,
+        new_address: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -290,6 +355,7 @@ mod ProverStaking {
             unstake_lockup_secs: 604800,       // 7 days
             reward_apy_bps: 1500,              // 15% APY
             max_consecutive_failures: 3,
+            stake_eligibility_delay_secs: 86400, // 24 hours - flash loan protection
         });
         
         self.total_staked.write(0);
@@ -330,6 +396,10 @@ mod ProverStaking {
             if stake.staked_at == 0 {
                 stake.staked_at = now;
             }
+
+            // SECURITY: Set eligibility delay for flash loan protection
+            // New stakes and additional stakes must wait before being eligible for jobs
+            stake.eligible_at = now + config.stake_eligibility_delay_secs;
             
             self.stakes.write(caller, stake);
             
@@ -525,10 +595,13 @@ mod ProverStaking {
             let stake = self.stakes.read(worker);
             let config = self.config.read();
             let min_stake = self._get_min_stake_internal(stake.gpu_tier, @config);
-            
-            stake.is_active 
-                && stake.amount >= min_stake 
+            let now = get_block_timestamp();
+
+            // SECURITY: Check eligibility delay has passed (flash loan protection)
+            stake.is_active
+                && stake.amount >= min_stake
                 && stake.consecutive_failures < config.max_consecutive_failures
+                && now >= stake.eligible_at
         }
 
         fn get_config(self: @ContractState) -> StakingConfig {
@@ -548,19 +621,43 @@ mod ProverStaking {
         /// Set OptimisticTEE contract address (admin only)
         fn set_optimistic_tee(ref self: ContractState, tee: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
+            let old_address = self.optimistic_tee.read();
             self.optimistic_tee.write(tee);
+
+            self.emit(ContractAddressUpdated {
+                updated_by: get_caller_address(),
+                contract_type: 'optimistic_tee',
+                old_address,
+                new_address: tee,
+            });
         }
 
         /// Set verifier contract address (admin only)
         fn set_verifier(ref self: ContractState, verifier: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
+            let old_address = self.verifier.read();
             self.verifier.write(verifier);
+
+            self.emit(ContractAddressUpdated {
+                updated_by: get_caller_address(),
+                contract_type: 'verifier',
+                old_address,
+                new_address: verifier,
+            });
         }
 
         /// Set job manager contract address (admin only)
         fn set_job_manager(ref self: ContractState, job_manager: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
+            let old_address = self.job_manager.read();
             self.job_manager.write(job_manager);
+
+            self.emit(ContractAddressUpdated {
+                updated_by: get_caller_address(),
+                contract_type: 'job_manager',
+                old_address,
+                new_address: job_manager,
+            });
         }
 
         fn total_staked(self: @ContractState) -> u256 {
@@ -569,6 +666,62 @@ mod ProverStaking {
 
         fn total_slashed(self: @ContractState) -> u256 {
             self.total_slashed.read()
+        }
+
+        // =========================================================================
+        // Pausable
+        // =========================================================================
+
+        fn pause(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(!self.paused.read(), "Already paused");
+            self.paused.write(true);
+            self.emit(ContractPaused { account: get_caller_address() });
+        }
+
+        fn unpause(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(self.paused.read(), "Not paused");
+            self.paused.write(false);
+            self.emit(ContractUnpaused { account: get_caller_address() });
+        }
+
+        fn is_paused(self: @ContractState) -> bool {
+            self.paused.read()
+        }
+
+        // =========================================================================
+        // Emergency Operations
+        // =========================================================================
+
+        fn emergency_withdraw(
+            ref self: ContractState,
+            token: ContractAddress,
+            recipient: ContractAddress,
+            amount: u256
+        ) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            // SECURITY: Only allow emergency withdrawal when contract is paused
+            assert!(self.paused.read(), "Contract must be paused");
+
+            // Validate recipient
+            assert!(!recipient.is_zero(), "Invalid recipient");
+
+            // Validate amount
+            assert!(amount > 0, "Amount must be greater than 0");
+
+            // Transfer tokens
+            let token_dispatcher = IERC20Dispatcher { contract_address: token };
+            let success = token_dispatcher.transfer(recipient, amount);
+            assert!(success, "Emergency withdrawal failed");
+
+            self.emit(EmergencyWithdrawal {
+                token,
+                recipient,
+                amount,
+                withdrawn_by: get_caller_address(),
+            });
         }
     }
 

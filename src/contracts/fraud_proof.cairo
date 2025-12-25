@@ -5,9 +5,10 @@
 mod FraudProof {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
     use starknet::storage::{
-        StoragePointerReadAccess, StoragePointerWriteAccess, 
+        StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
+    use core::num::traits::Zero;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use sage_contracts::interfaces::proof_verifier::{IProofVerifierDispatcher, IProofVerifierDispatcherTrait, ProofJobId, ProofStatus};
     use sage_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
@@ -411,32 +412,54 @@ mod FraudProof {
             challenge.status = ChallengeStatus::ValidProof;
             challenge.resolved_at = get_block_timestamp();
             self.challenges.write(challenge_id, challenge);
-            
+
             self.valid_challenges.write(self.valid_challenges.read() + 1);
-            
-            // Slash worker
+
+            // Determine penalty percentage based on violation severity
             let penalty_bps = self._determine_penalty(challenge.verification_method);
             let staking_contract = self.staking_contract.read();
-            
-            // Call staking contract to slash
+
+            // Call staking contract to slash worker
+            // The slash function handles the actual penalty calculation and distribution
             let staking_dispatcher = IWorkerStakingDispatcher { contract_address: staking_contract };
             staking_dispatcher.slash(challenge.worker_id, penalty_bps, 'fraud_proof', challenge.challenger);
-            
-            // Reward challenger (50% of slashed amount + deposit back)
+
+            // Get minimum stake as estimate for penalty calculation
+            // The actual slashed amount is calculated in the staking contract
+            // Here we estimate based on minimum stake * penalty percentage
+            let min_stake_for_estimate = staking_dispatcher.get_min_stake(0, false, 0); // Consumer tier, no TEE, 0 rep
+            let penalty_bps_u256: u256 = penalty_bps.into();
+            let penalty_amount: u256 = (min_stake_for_estimate * penalty_bps_u256) / 10000;
+
+            // Update total slashed stats
+            self.total_slashed.write(self.total_slashed.read() + penalty_amount);
+
+            // Return challenger's deposit
             let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            token.transfer(challenge.challenger, challenge.deposit);
-            
+            let transfer_success = token.transfer(challenge.challenger, challenge.deposit);
+            assert!(transfer_success, "Deposit refund failed");
+
+            // Calculate total reward (deposit + 50% of penalty)
+            let challenger_reward = challenge.deposit + (penalty_amount / 2);
+            self.total_rewards_paid.write(self.total_rewards_paid.read() + (penalty_amount / 2));
+
             self.emit(ChallengeResolved {
                 challenge_id,
                 status: ChallengeStatus::ValidProof,
                 winner: challenge.challenger,
-                reward: challenge.deposit,
+                reward: challenger_reward,
             });
-            
+
             self.emit(FraudDetected {
                 job_id: challenge.job_id,
                 worker_id: challenge.worker_id,
-                penalty_amount: 0, // TODO: Calculate from slashing
+                penalty_amount,
+            });
+
+            self.emit(WorkerSlashed {
+                worker_id: challenge.worker_id,
+                amount: penalty_amount,
+                reason: 'fraud_proof',
             });
         }
 
@@ -476,14 +499,34 @@ mod FraudProof {
         }
 
         /// Verify ZK proof via ProofVerifier oracle
-        fn _verify_zk_proof(self: @ContractState, proof_hash: felt252, result_hash: felt252) -> bool {
-            let _ = result_hash; // TODO: Verify proof matches result hash
-            let proof_verifier = IProofVerifierDispatcher { contract_address: self.proof_verifier.read() };
-            let job_id = ProofJobId { value: proof_hash.into() };
-            
+        /// Returns true if the challenger's evidence proves fraud (disputed result differs from verified)
+        fn _verify_zk_proof(self: @ContractState, evidence_hash: felt252, disputed_result_hash: felt252) -> bool {
+            let proof_verifier_addr = self.proof_verifier.read();
+
+            // If no proof verifier configured, can't verify
+            if proof_verifier_addr.is_zero() {
+                return false;
+            }
+
+            let proof_verifier = IProofVerifierDispatcher { contract_address: proof_verifier_addr };
+
+            // The evidence_hash is used as the job ID to look up the verified proof
+            let job_id = ProofJobId { value: evidence_hash.into() };
+
+            // Check if this evidence has a verified proof in the system
             let status = proof_verifier.get_proof_status(job_id);
+
+            // The challenge is valid (fraud detected) if:
+            // 1. The evidence proof is verified (challenger provided valid proof)
+            // 2. AND the disputed result hash differs from what was verified
+            // This means the worker submitted different results than what the proof system verified
             match status {
-                ProofStatus::Verified => true,
+                ProofStatus::Verified => {
+                    // Proof is verified - challenger successfully proved discrepancy
+                    // The disputed_result_hash is what the worker submitted
+                    // If it differs from the evidence_hash (what was actually computed), fraud occurred
+                    disputed_result_hash != evidence_hash
+                },
                 _ => false
             }
         }
