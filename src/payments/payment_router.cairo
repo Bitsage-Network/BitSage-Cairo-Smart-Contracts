@@ -73,6 +73,19 @@ pub struct DiscountTiers {
     pub privacy_credit_discount_bps: u32, // Privacy: 200 = 2%
 }
 
+/// Dynamic fee tiers based on monthly volume
+/// Higher volume = lower protocol fees to incentivize growth
+#[derive(Copy, Drop, Serde, starknet::Store)]
+pub struct DynamicFeeTiers {
+    pub tier1_threshold: u256,    // Volume threshold for tier 1 (e.g., $100K)
+    pub tier1_fee_bps: u32,       // Fee at tier 1 (e.g., 1800 = 18%)
+    pub tier2_threshold: u256,    // Volume threshold for tier 2 (e.g., $500K)
+    pub tier2_fee_bps: u32,       // Fee at tier 2 (e.g., 1500 = 15%)
+    pub tier3_threshold: u256,    // Volume threshold for tier 3 (e.g., $1M)
+    pub tier3_fee_bps: u32,       // Fee at tier 3 (e.g., 1200 = 12%)
+    pub enabled: bool,            // Whether dynamic fees are active
+}
+
 #[starknet::interface]
 pub trait IPaymentRouter<TContractState> {
     /// Get a payment quote for compute services
@@ -295,13 +308,29 @@ pub trait IPaymentRouter<TContractState> {
 
     /// Get user's remaining staked credit available
     fn get_available_staked_credit(self: @TContractState, user: ContractAddress) -> u256;
+
+    // =========================================================================
+    // Dynamic Fee Tiers
+    // =========================================================================
+
+    /// Admin: Set dynamic fee tier configuration
+    fn set_dynamic_fee_tiers(ref self: TContractState, tiers: DynamicFeeTiers);
+
+    /// Get current dynamic fee tier configuration
+    fn get_dynamic_fee_tiers(self: @TContractState) -> DynamicFeeTiers;
+
+    /// Get current effective protocol fee based on monthly volume
+    fn get_current_protocol_fee(self: @TContractState) -> u32;
+
+    /// Get current monthly volume
+    fn get_monthly_volume(self: @TContractState) -> u256;
 }
 
 #[starknet::contract]
 mod PaymentRouter {
     use super::{
         IPaymentRouter, PaymentToken, PaymentQuote, OTCConfig,
-        FeeDistribution, DiscountTiers, ECPoint
+        FeeDistribution, DiscountTiers, ECPoint, DynamicFeeTiers
     };
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
     use starknet::storage::{
@@ -402,6 +431,11 @@ mod PaymentRouter {
 
         // Staked credit limits
         staked_credit_limit_bps: u32,  // Max credit as % of staked balance (e.g., 5000 = 50%)
+
+        // Dynamic fee tiers based on monthly volume
+        dynamic_fee_tiers: DynamicFeeTiers,
+        monthly_volume_usd: u256,           // Current month's volume
+        month_start_timestamp: u64,         // When current month started
     }
 
     #[event]
@@ -432,6 +466,27 @@ mod PaymentRouter {
         OracleFallbackUsed: OracleFallbackUsed,
         OracleConfigUpdated: OracleConfigUpdated,
         StakedCreditLimitUpdated: StakedCreditLimitUpdated,
+        DynamicFeeTiersUpdated: DynamicFeeTiersUpdated,
+        MonthlyVolumeReset: MonthlyVolumeReset,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct DynamicFeeTiersUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        tier1_threshold: u256,
+        tier1_fee_bps: u32,
+        tier2_threshold: u256,
+        tier2_fee_bps: u32,
+        tier3_threshold: u256,
+        tier3_fee_bps: u32,
+        enabled: bool,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct MonthlyVolumeReset {
+        previous_volume: u256,
+        reset_timestamp: u64,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -710,6 +765,21 @@ mod PaymentRouter {
 
         // Initialize staked credit limit (50% of staked balance)
         self.staked_credit_limit_bps.write(5000);
+
+        // Initialize dynamic fee tiers (disabled by default, using base 20% fee)
+        // Thresholds in USD with 18 decimals
+        let dynamic_fees = DynamicFeeTiers {
+            tier1_threshold: 100000_u256 * 1000000000000000000, // $100K
+            tier1_fee_bps: 1800,  // 18%
+            tier2_threshold: 500000_u256 * 1000000000000000000, // $500K
+            tier2_fee_bps: 1500,  // 15%
+            tier3_threshold: 1000000_u256 * 1000000000000000000, // $1M
+            tier3_fee_bps: 1200,  // 12%
+            enabled: false,       // Disabled by default
+        };
+        self.dynamic_fee_tiers.write(dynamic_fees);
+        self.monthly_volume_usd.write(0);
+        self.month_start_timestamp.write(get_block_timestamp());
     }
 
     #[abi(embed_v0)]
@@ -819,8 +889,8 @@ mod PaymentRouter {
             // Transfer payment token from user
             self._collect_payment(caller, quote.payment_token, quote.payment_amount);
 
-            // Distribute fees in SAGE
-            self._distribute_fees(quote.sage_equivalent, job_id);
+            // Distribute fees in SAGE (with dynamic fee tier tracking)
+            self._distribute_fees(quote.sage_equivalent, job_id, quote.usd_value);
 
             self.emit(PaymentExecuted {
                 quote_id,
@@ -870,8 +940,8 @@ mod PaymentRouter {
             // Transfer SAGE from user
             self._collect_payment(caller, PaymentToken::SAGE, amount);
 
-            // Distribute fees
-            self._distribute_fees(effective_amount, job_id);
+            // Distribute fees (with dynamic fee tier tracking)
+            self._distribute_fees(effective_amount, job_id, usd_value);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -942,8 +1012,8 @@ mod PaymentRouter {
             self.total_payments_usd.write(total_usd + usd_amount);
 
             // INTERACTIONS: External calls LAST
-            // Distribute fees (from protocol reserves, not user transfer)
-            self._distribute_fees(sage_amount, job_id);
+            // Distribute fees (from protocol reserves, with dynamic fee tier tracking)
+            self._distribute_fees(sage_amount, job_id, usd_amount);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -1022,8 +1092,8 @@ mod PaymentRouter {
             let discounted_usd = (usd_amount * (BPS_DENOMINATOR - discounts.privacy_credit_discount_bps.into())) / BPS_DENOMINATOR;
             let sage_amount = (discounted_usd * USD_DECIMALS) / BASE_SAGE_PRICE_USD;
 
-            // Distribute fees (from privacy pool)
-            self._distribute_fees(sage_amount, 0);
+            // Distribute fees (from privacy pool, with dynamic fee tier tracking)
+            self._distribute_fees(sage_amount, 0, usd_amount);
 
             self.emit(PrivacyPayment {
                 job_id: 0,
@@ -1539,6 +1609,87 @@ mod PaymentRouter {
             // In practice, this should query the staking contract
             credits_used
         }
+
+        // =========================================================================
+        // Dynamic Fee Tiers
+        // =========================================================================
+
+        fn set_dynamic_fee_tiers(ref self: ContractState, tiers: DynamicFeeTiers) {
+            self._only_owner();
+
+            // Validate: fees must be reasonable (between 5% and 25%)
+            assert!(tiers.tier1_fee_bps >= 500 && tiers.tier1_fee_bps <= 2500, "Tier1 fee out of range");
+            assert!(tiers.tier2_fee_bps >= 500 && tiers.tier2_fee_bps <= 2500, "Tier2 fee out of range");
+            assert!(tiers.tier3_fee_bps >= 500 && tiers.tier3_fee_bps <= 2500, "Tier3 fee out of range");
+
+            // Validate: higher tiers should have lower fees
+            assert!(tiers.tier2_fee_bps <= tiers.tier1_fee_bps, "Tier2 fee must be <= Tier1");
+            assert!(tiers.tier3_fee_bps <= tiers.tier2_fee_bps, "Tier3 fee must be <= Tier2");
+
+            // Validate: thresholds must be increasing
+            assert!(tiers.tier2_threshold > tiers.tier1_threshold, "Tier2 threshold must be > Tier1");
+            assert!(tiers.tier3_threshold > tiers.tier2_threshold, "Tier3 threshold must be > Tier2");
+
+            self.dynamic_fee_tiers.write(tiers);
+
+            self.emit(DynamicFeeTiersUpdated {
+                updated_by: get_caller_address(),
+                tier1_threshold: tiers.tier1_threshold,
+                tier1_fee_bps: tiers.tier1_fee_bps,
+                tier2_threshold: tiers.tier2_threshold,
+                tier2_fee_bps: tiers.tier2_fee_bps,
+                tier3_threshold: tiers.tier3_threshold,
+                tier3_fee_bps: tiers.tier3_fee_bps,
+                enabled: tiers.enabled,
+            });
+        }
+
+        fn get_dynamic_fee_tiers(self: @ContractState) -> DynamicFeeTiers {
+            self.dynamic_fee_tiers.read()
+        }
+
+        fn get_current_protocol_fee(self: @ContractState) -> u32 {
+            let tiers = self.dynamic_fee_tiers.read();
+
+            // If dynamic fees disabled, return base fee from fee_distribution
+            if !tiers.enabled {
+                return self.fee_distribution.read().protocol_fee_bps;
+            }
+
+            // Check if we need to conceptually reset the month
+            // (actual reset happens on next payment, but for query we use current volume)
+            let now = get_block_timestamp();
+            let month_start = self.month_start_timestamp.read();
+            let current_volume = if now >= month_start + 2592000 { // 30 days in seconds
+                0 // New month, volume resets
+            } else {
+                self.monthly_volume_usd.read()
+            };
+
+            // Determine fee based on volume tier
+            if current_volume >= tiers.tier3_threshold {
+                tiers.tier3_fee_bps
+            } else if current_volume >= tiers.tier2_threshold {
+                tiers.tier2_fee_bps
+            } else if current_volume >= tiers.tier1_threshold {
+                tiers.tier1_fee_bps
+            } else {
+                // Below tier1, use base fee
+                self.fee_distribution.read().protocol_fee_bps
+            }
+        }
+
+        fn get_monthly_volume(self: @ContractState) -> u256 {
+            let now = get_block_timestamp();
+            let month_start = self.month_start_timestamp.read();
+
+            // Check if month has rolled over
+            if now >= month_start + 2592000 { // 30 days in seconds
+                0 // New month, volume is 0
+            } else {
+                self.monthly_volume_usd.read()
+            }
+        }
     }
 
     #[generate_trait]
@@ -1623,6 +1774,58 @@ mod PaymentRouter {
 
                 // Increment counter
                 self.user_payment_count_in_window.write(user, current_count + 1);
+            }
+        }
+
+        /// Update monthly volume tracking and reset if new month
+        /// Returns the current protocol fee after considering dynamic tiers
+        fn _update_monthly_volume_and_get_fee(ref self: ContractState, usd_amount: u256) -> u32 {
+            let now = get_block_timestamp();
+            let month_start = self.month_start_timestamp.read();
+            let tiers = self.dynamic_fee_tiers.read();
+
+            // Check if we need to reset for new month (30 days = 2592000 seconds)
+            let current_volume = if now >= month_start + 2592000 {
+                // New month - reset volume and timestamp
+                let old_volume = self.monthly_volume_usd.read();
+                self.month_start_timestamp.write(now);
+                self.monthly_volume_usd.write(usd_amount);
+
+                self.emit(MonthlyVolumeReset {
+                    previous_volume: old_volume,
+                    reset_timestamp: now,
+                });
+
+                usd_amount
+            } else {
+                // Same month - add to existing volume
+                let existing = self.monthly_volume_usd.read();
+                let new_volume = existing + usd_amount;
+                self.monthly_volume_usd.write(new_volume);
+                new_volume
+            };
+
+            // If dynamic fees disabled, return base fee
+            if !tiers.enabled {
+                return self.fee_distribution.read().protocol_fee_bps;
+            }
+
+            // Determine fee based on volume tier (use volume BEFORE this payment for fairness)
+            let volume_for_tier = if current_volume > usd_amount {
+                current_volume - usd_amount
+            } else {
+                0
+            };
+
+            if volume_for_tier >= tiers.tier3_threshold {
+                tiers.tier3_fee_bps
+            } else if volume_for_tier >= tiers.tier2_threshold {
+                tiers.tier2_fee_bps
+            } else if volume_for_tier >= tiers.tier1_threshold {
+                tiers.tier1_fee_bps
+            } else {
+                // Below tier1, use base fee
+                self.fee_distribution.read().protocol_fee_bps
             }
         }
 
@@ -1749,10 +1952,12 @@ mod PaymentRouter {
 
         /// Distribute payment: 80% to worker, 20% protocol fee (70% burn, 20% treasury, 10% stakers)
         /// All payments flow through Obelysk in SAGE, with optional privacy
+        /// Now supports dynamic fee tiers based on monthly volume
         fn _distribute_fees(
             ref self: ContractState,
             sage_amount: u256,
-            job_id: u256
+            job_id: u256,
+            usd_value: u256
         ) {
             let fee_dist = self.fee_distribution.read();
             let config = self.otc_config.read();
@@ -1761,18 +1966,23 @@ mod PaymentRouter {
             let sage_token = ISAGETokenDispatcher { contract_address: config.sage_address };
             let sage_erc20 = IERC20Dispatcher { contract_address: config.sage_address };
 
-            // Step 1: Calculate worker share (80%)
-            let worker_amount = (sage_amount * fee_dist.worker_bps.into()) / BPS_DENOMINATOR;
+            // Step 1: Update volume tracking and get dynamic protocol fee
+            let dynamic_protocol_fee_bps = self._update_monthly_volume_and_get_fee(usd_value);
 
-            // Step 2: Calculate protocol fee (20%)
+            // Step 2: Calculate worker share using dynamic fee
+            // worker_bps = 10000 - protocol_fee_bps (worker always gets the remainder)
+            let worker_bps: u256 = 10000 - dynamic_protocol_fee_bps.into();
+            let worker_amount = (sage_amount * worker_bps) / BPS_DENOMINATOR;
+
+            // Step 3: Calculate protocol fee using dynamic rate
             let protocol_fee = sage_amount - worker_amount;
 
-            // Step 3: Split protocol fee (70% burn, 20% treasury, 10% stakers)
+            // Step 4: Split protocol fee (70% burn, 20% treasury, 10% stakers)
             let burn_amount = (protocol_fee * fee_dist.burn_share_bps.into()) / BPS_DENOMINATOR;
             let treasury_amount = (protocol_fee * fee_dist.treasury_share_bps.into()) / BPS_DENOMINATOR;
             let staker_amount = protocol_fee - burn_amount - treasury_amount;
 
-            // Step 4: Pay worker via Obelysk (with optional privacy)
+            // Step 5: Pay worker via Obelysk (with optional privacy)
             let worker = self.job_worker.read(job_id);
             let privacy_enabled = self.job_privacy_enabled.read(job_id);
 
@@ -1827,9 +2037,9 @@ mod PaymentRouter {
                 });
             }
 
-            // Step 5: Execute protocol fee distribution
+            // Step 6: Execute protocol fee distribution
 
-            // 5a: Burn tokens (70% of protocol fee)
+            // 6a: Burn tokens (70% of protocol fee)
             // Use burn_from_revenue with protocol fee as revenue source
             if burn_amount > 0 {
                 // revenue_source = protocol_fee in USD value (estimated)
@@ -1844,14 +2054,14 @@ mod PaymentRouter {
                 sage_token.burn_from_revenue(burn_amount, burn_usd_value, execution_price);
             }
 
-            // 5b: Transfer to staker rewards pool (10% of protocol fee)
+            // 6b: Transfer to staker rewards pool (10% of protocol fee)
             let staker_pool = self.staker_rewards_pool.read();
             if !staker_pool.is_zero() && staker_amount > 0 {
                 let success = sage_erc20.transfer(staker_pool, staker_amount);
                 assert(success, 'Staker transfer failed');
             }
 
-            // 5c: Transfer to treasury (20% of protocol fee)
+            // 6c: Transfer to treasury (20% of protocol fee)
             let treasury = self.treasury_address.read();
             if !treasury.is_zero() && treasury_amount > 0 {
                 let success = sage_erc20.transfer(treasury, treasury_amount);

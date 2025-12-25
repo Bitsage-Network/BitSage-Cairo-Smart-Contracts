@@ -35,6 +35,40 @@ pub enum GpuTier {
     Frontier,
 }
 
+/// Lockup tier for bonus APY rewards
+/// Longer lockups earn higher rewards
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
+pub enum LockupTier {
+    /// No lockup - base APY (15%)
+    #[default]
+    Flexible,
+    /// 30-day lockup - base + 2% bonus (17% total)
+    Month,
+    /// 90-day lockup - base + 5% bonus (20% total)
+    Quarter,
+    /// 180-day lockup - base + 8% bonus (23% total)
+    HalfYear,
+    /// 365-day lockup - base + 12% bonus (27% total)
+    Year,
+}
+
+/// Lockup tier configuration
+#[derive(Copy, Drop, Serde, starknet::Store)]
+pub struct LockupTierConfig {
+    /// Flexible tier bonus (basis points added to base APY)
+    pub flexible_bonus_bps: u16,   // 0 = 0%
+    /// 30-day tier bonus
+    pub month_bonus_bps: u16,      // 200 = 2%
+    /// 90-day tier bonus
+    pub quarter_bonus_bps: u16,    // 500 = 5%
+    /// 180-day tier bonus
+    pub half_year_bonus_bps: u16,  // 800 = 8%
+    /// 365-day tier bonus
+    pub year_bonus_bps: u16,       // 1200 = 12%
+    /// Early withdrawal penalty (basis points of principal)
+    pub early_withdrawal_penalty_bps: u16, // 500 = 5%
+}
+
 /// Slashing reason
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum SlashReason {
@@ -75,6 +109,10 @@ pub struct WorkerStake {
     /// SECURITY: Timestamp when worker becomes eligible for jobs (flash loan protection)
     /// Workers must wait this period before being assigned jobs
     pub eligible_at: u64,
+    /// Lockup tier for bonus APY
+    pub lockup_tier: LockupTier,
+    /// Lockup end timestamp (0 for Flexible tier)
+    pub lockup_ends_at: u64,
 }
 
 /// Staking configuration
@@ -162,6 +200,33 @@ pub trait IProverStaking<TContractState> {
     fn total_slashed(self: @TContractState) -> u256;
 
     // =========================================================================
+    // Tier-Based Staking with Lockup Bonuses
+    // =========================================================================
+
+    /// Stake with a specific lockup tier for bonus APY
+    fn stake_with_lockup(
+        ref self: TContractState,
+        amount: u256,
+        gpu_tier: GpuTier,
+        lockup_tier: LockupTier
+    );
+
+    /// Get lockup tier configuration
+    fn get_lockup_tier_config(self: @TContractState) -> LockupTierConfig;
+
+    /// Update lockup tier configuration (admin only)
+    fn set_lockup_tier_config(ref self: TContractState, config: LockupTierConfig);
+
+    /// Get effective APY for a worker (base + lockup bonus)
+    fn get_effective_apy(self: @TContractState, worker: ContractAddress) -> u16;
+
+    /// Early unstake with penalty (only for locked stakes)
+    fn early_unstake(ref self: TContractState, amount: u256);
+
+    /// Get lockup duration for a tier in seconds
+    fn get_lockup_duration(self: @TContractState, lockup_tier: LockupTier) -> u64;
+
+    // =========================================================================
     // Pausable
     // =========================================================================
 
@@ -191,6 +256,7 @@ pub trait IProverStaking<TContractState> {
 mod ProverStaking {
     use super::{
         IProverStaking, WorkerStake, StakingConfig, GpuTier, SlashReason,
+        LockupTier, LockupTierConfig,
     };
     use starknet::{
         ContractAddress, get_caller_address, get_block_timestamp,
@@ -235,18 +301,23 @@ mod ProverStaking {
         /// SECURITY: Slash lockup - prevents immediate re-staking after slash
         /// Maps worker address to timestamp when lockup ends
         slash_lockup_until: Map<ContractAddress, u64>,
+        /// Lockup tier configuration for bonus APY
+        lockup_tier_config: LockupTierConfig,
     }
 
     #[event]
     #[derive(Drop, starknet::Event)]
     enum Event {
         Staked: Staked,
+        StakedWithLockup: StakedWithLockup,
         UnstakeRequested: UnstakeRequested,
         UnstakeCompleted: UnstakeCompleted,
+        EarlyUnstake: EarlyUnstake,
         Slashed: Slashed,
         RewardsClaimed: RewardsClaimed,
         SuccessRecorded: SuccessRecorded,
         ConfigUpdated: ConfigUpdated,
+        LockupTierConfigUpdated: LockupTierConfigUpdated,
         ContractAddressUpdated: ContractAddressUpdated,
         ContractPaused: ContractPaused,
         ContractUnpaused: ContractUnpaused,
@@ -335,6 +406,38 @@ mod ProverStaking {
         reward_apy_bps: u16,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct StakedWithLockup {
+        #[key]
+        worker: ContractAddress,
+        amount: u256,
+        gpu_tier: GpuTier,
+        lockup_tier: LockupTier,
+        lockup_ends_at: u64,
+        effective_apy_bps: u16,
+        total_stake: u256,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct EarlyUnstake {
+        #[key]
+        worker: ContractAddress,
+        amount: u256,
+        penalty: u256,
+        received: u256,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct LockupTierConfigUpdated {
+        #[key]
+        updated_by: ContractAddress,
+        month_bonus_bps: u16,
+        quarter_bonus_bps: u16,
+        half_year_bonus_bps: u16,
+        year_bonus_bps: u16,
+        early_withdrawal_penalty_bps: u16,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -367,6 +470,16 @@ mod ProverStaking {
         self.total_staked.write(0);
         self.total_slashed.write(0);
         self.paused.write(false);
+
+        // Initialize lockup tier configuration
+        self.lockup_tier_config.write(LockupTierConfig {
+            flexible_bonus_bps: 0,       // No bonus for flexible staking
+            month_bonus_bps: 200,        // +2% for 30-day lockup (17% total)
+            quarter_bonus_bps: 500,      // +5% for 90-day lockup (20% total)
+            half_year_bonus_bps: 800,    // +8% for 180-day lockup (23% total)
+            year_bonus_bps: 1200,        // +12% for 365-day lockup (27% total)
+            early_withdrawal_penalty_bps: 500, // 5% penalty for early withdrawal
+        });
     }
 
     #[abi(embed_v0)]
@@ -690,6 +803,195 @@ mod ProverStaking {
         }
 
         // =========================================================================
+        // Tier-Based Staking with Lockup Bonuses
+        // =========================================================================
+
+        fn stake_with_lockup(
+            ref self: ContractState,
+            amount: u256,
+            gpu_tier: GpuTier,
+            lockup_tier: LockupTier
+        ) {
+            assert!(!self.paused.read(), "Contract is paused");
+            assert!(amount > 0, "Amount must be greater than 0");
+
+            let caller = get_caller_address();
+            let now = get_block_timestamp();
+
+            // Check slash lockup
+            let slash_lockup_end = self.slash_lockup_until.read(caller);
+            assert!(now >= slash_lockup_end, "Slash lockup period not expired");
+
+            let config = self.config.read();
+            let lockup_config = self.lockup_tier_config.read();
+
+            // Check minimum stake
+            let min_stake = self._get_min_stake_internal(gpu_tier, @config);
+            let mut stake = self.stakes.read(caller);
+            let new_total = stake.amount + amount;
+            assert!(new_total >= min_stake, "Insufficient stake for tier");
+
+            // Cannot change lockup tier if already locked
+            if stake.lockup_ends_at > now && stake.lockup_tier != lockup_tier {
+                panic!("Cannot change lockup tier while locked");
+            }
+
+            // Transfer tokens
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            token.transfer_from(caller, starknet::get_contract_address(), amount);
+
+            // Calculate pending rewards before updating
+            if stake.amount > 0 {
+                let rewards = self._calculate_rewards_with_lockup(@stake, @config, @lockup_config);
+                stake.pending_rewards += rewards;
+            }
+
+            // Calculate lockup end time
+            let lockup_duration = self._get_lockup_duration(lockup_tier);
+            let lockup_ends_at = now + lockup_duration;
+
+            // Update stake
+            stake.amount = new_total;
+            stake.gpu_tier = gpu_tier;
+            stake.is_active = true;
+            stake.last_claim_at = now;
+            stake.lockup_tier = lockup_tier;
+            stake.lockup_ends_at = lockup_ends_at;
+            if stake.staked_at == 0 {
+                stake.staked_at = now;
+            }
+
+            // Set eligibility delay
+            stake.eligible_at = now + config.stake_eligibility_delay_secs;
+
+            self.stakes.write(caller, stake);
+
+            // Update total
+            let total = self.total_staked.read() + amount;
+            self.total_staked.write(total);
+
+            // Calculate effective APY for event
+            let effective_apy = self._get_effective_apy_internal(lockup_tier, @config, @lockup_config);
+
+            self.emit(StakedWithLockup {
+                worker: caller,
+                amount,
+                gpu_tier,
+                lockup_tier,
+                lockup_ends_at,
+                effective_apy_bps: effective_apy,
+                total_stake: new_total,
+            });
+        }
+
+        fn get_lockup_tier_config(self: @ContractState) -> LockupTierConfig {
+            self.lockup_tier_config.read()
+        }
+
+        fn set_lockup_tier_config(ref self: ContractState, config: LockupTierConfig) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            // Validate: bonuses should be reasonable (max 30% total)
+            assert!(config.flexible_bonus_bps <= 3000, "Flexible bonus too high");
+            assert!(config.month_bonus_bps <= 3000, "Month bonus too high");
+            assert!(config.quarter_bonus_bps <= 3000, "Quarter bonus too high");
+            assert!(config.half_year_bonus_bps <= 3000, "Half year bonus too high");
+            assert!(config.year_bonus_bps <= 3000, "Year bonus too high");
+
+            // Validate: early withdrawal penalty should be reasonable (max 25%)
+            assert!(config.early_withdrawal_penalty_bps <= 2500, "Penalty too high");
+
+            // Validate: higher tiers should have higher bonuses
+            assert!(config.month_bonus_bps >= config.flexible_bonus_bps, "Month should >= Flexible");
+            assert!(config.quarter_bonus_bps >= config.month_bonus_bps, "Quarter should >= Month");
+            assert!(config.half_year_bonus_bps >= config.quarter_bonus_bps, "HalfYear should >= Quarter");
+            assert!(config.year_bonus_bps >= config.half_year_bonus_bps, "Year should >= HalfYear");
+
+            self.lockup_tier_config.write(config);
+
+            self.emit(LockupTierConfigUpdated {
+                updated_by: get_caller_address(),
+                month_bonus_bps: config.month_bonus_bps,
+                quarter_bonus_bps: config.quarter_bonus_bps,
+                half_year_bonus_bps: config.half_year_bonus_bps,
+                year_bonus_bps: config.year_bonus_bps,
+                early_withdrawal_penalty_bps: config.early_withdrawal_penalty_bps,
+            });
+        }
+
+        fn get_effective_apy(self: @ContractState, worker: ContractAddress) -> u16 {
+            let stake = self.stakes.read(worker);
+            let config = self.config.read();
+            let lockup_config = self.lockup_tier_config.read();
+            self._get_effective_apy_internal(stake.lockup_tier, @config, @lockup_config)
+        }
+
+        fn early_unstake(ref self: ContractState, amount: u256) {
+            assert!(amount > 0, "Amount must be greater than 0");
+
+            let caller = get_caller_address();
+            let now = get_block_timestamp();
+            let mut stake = self.stakes.read(caller);
+            let lockup_config = self.lockup_tier_config.read();
+
+            assert!(stake.amount >= amount, "Insufficient stake");
+            assert!(stake.locked_amount == 0, "Pending unstake exists");
+
+            // Check if lockup is still active
+            let is_early = now < stake.lockup_ends_at;
+            assert!(is_early, "Lockup expired - use regular unstake");
+
+            // Calculate penalty
+            let penalty_bps: u256 = lockup_config.early_withdrawal_penalty_bps.into();
+            let penalty = (amount * penalty_bps) / 10000;
+            let received = amount - penalty;
+
+            // Update stake
+            stake.amount -= amount;
+
+            // Check if still meets minimum
+            let config = self.config.read();
+            let min_stake = self._get_min_stake_internal(stake.gpu_tier, @config);
+            if stake.amount < min_stake {
+                stake.is_active = false;
+            }
+
+            // If fully unstaked, reset lockup
+            if stake.amount == 0 {
+                stake.lockup_tier = LockupTier::Flexible;
+                stake.lockup_ends_at = 0;
+            }
+
+            self.stakes.write(caller, stake);
+
+            // Update total staked
+            let total = self.total_staked.read() - amount;
+            self.total_staked.write(total);
+
+            // Transfer tokens (minus penalty)
+            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            if received > 0 {
+                token.transfer(caller, received);
+            }
+
+            // Transfer penalty to treasury
+            if penalty > 0 {
+                token.transfer(self.treasury.read(), penalty);
+            }
+
+            self.emit(EarlyUnstake {
+                worker: caller,
+                amount,
+                penalty,
+                received,
+            });
+        }
+
+        fn get_lockup_duration(self: @ContractState, lockup_tier: LockupTier) -> u64 {
+            self._get_lockup_duration(lockup_tier)
+        }
+
+        // =========================================================================
         // Pausable
         // =========================================================================
 
@@ -769,20 +1071,74 @@ mod ProverStaking {
         ) -> u256 {
             let now = get_block_timestamp();
             let time_elapsed = now - *stake.last_claim_at;
-            
+
             if time_elapsed == 0 || *stake.amount == 0 {
                 return 0;
             }
-            
+
             // Calculate rewards: amount * APY * time / year
             // APY is in basis points (1500 = 15%)
             let apy: u256 = (*config.reward_apy_bps).into();
             let seconds_per_year: u256 = 31536000; // 365 * 24 * 60 * 60
-            
-            let rewards = (*stake.amount * apy * time_elapsed.into()) 
+
+            let rewards = (*stake.amount * apy * time_elapsed.into())
                 / (10000 * seconds_per_year);
-            
+
             rewards
+        }
+
+        /// Calculate rewards with lockup tier bonus
+        fn _calculate_rewards_with_lockup(
+            self: @ContractState,
+            stake: @WorkerStake,
+            config: @StakingConfig,
+            lockup_config: @LockupTierConfig,
+        ) -> u256 {
+            let now = get_block_timestamp();
+            let time_elapsed = now - *stake.last_claim_at;
+
+            if time_elapsed == 0 || *stake.amount == 0 {
+                return 0;
+            }
+
+            // Get effective APY including lockup bonus
+            let effective_apy = self._get_effective_apy_internal(*stake.lockup_tier, config, lockup_config);
+            let apy: u256 = effective_apy.into();
+            let seconds_per_year: u256 = 31536000; // 365 * 24 * 60 * 60
+
+            let rewards = (*stake.amount * apy * time_elapsed.into())
+                / (10000 * seconds_per_year);
+
+            rewards
+        }
+
+        /// Get lockup duration in seconds for a tier
+        fn _get_lockup_duration(self: @ContractState, lockup_tier: LockupTier) -> u64 {
+            match lockup_tier {
+                LockupTier::Flexible => 0,           // No lockup
+                LockupTier::Month => 2592000,        // 30 days (30 * 24 * 60 * 60)
+                LockupTier::Quarter => 7776000,      // 90 days (90 * 24 * 60 * 60)
+                LockupTier::HalfYear => 15552000,    // 180 days (180 * 24 * 60 * 60)
+                LockupTier::Year => 31536000,        // 365 days (365 * 24 * 60 * 60)
+            }
+        }
+
+        /// Get effective APY (base + lockup bonus)
+        fn _get_effective_apy_internal(
+            self: @ContractState,
+            lockup_tier: LockupTier,
+            config: @StakingConfig,
+            lockup_config: @LockupTierConfig,
+        ) -> u16 {
+            let base_apy = *config.reward_apy_bps;
+            let bonus = match lockup_tier {
+                LockupTier::Flexible => *lockup_config.flexible_bonus_bps,
+                LockupTier::Month => *lockup_config.month_bonus_bps,
+                LockupTier::Quarter => *lockup_config.quarter_bonus_bps,
+                LockupTier::HalfYear => *lockup_config.half_year_bonus_bps,
+                LockupTier::Year => *lockup_config.year_bonus_bps,
+            };
+            base_apy + bonus
         }
     }
 }
