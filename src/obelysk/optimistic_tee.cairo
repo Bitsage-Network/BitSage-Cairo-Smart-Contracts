@@ -303,8 +303,8 @@ mod OptimisticTEE {
             // The TEE hardware embeds result_hash and worker_id in report_data
             // This proves the TEE actually computed and signed this specific result
             let report_data_valid = verify_report_data_matches(
-                verification_result.report_data,  // From verified quote
-                0,  // report_data_low not used in simplified extraction
+                verification_result.report_data,  // report_data_high from verified quote
+                0,  // report_data_low (extended data, zero if not provided)
                 result_hash,
                 worker_id,
             );

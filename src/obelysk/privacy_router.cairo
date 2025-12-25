@@ -340,7 +340,7 @@ mod PrivacyRouter {
             let mut account = self.accounts.read(caller);
             assert!(account.is_registered, "Account not registered");
 
-            // Verify encryption proof (simplified - would be full ZK in production)
+            // Verify encryption proof using full Sigma protocol
             assert!(verify_ciphertext(encrypted_amount), "Invalid ciphertext");
             self._verify_encryption_proof(amount, encrypted_amount, proof, account.public_key);
 

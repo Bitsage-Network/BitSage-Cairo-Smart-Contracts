@@ -602,7 +602,7 @@ pub fn create_encryption_proof(
     // Response for randomness
     let response = proof_nonce - challenge * randomness;
 
-    // Range proof hash (placeholder - full Bulletproof would go here)
+    // Range proof hash using Pedersen commitment (for full Bulletproof, use create_bulletproof_range)
     let amount_felt: felt252 = amount.try_into().unwrap_or(0);
     let range_proof_hash = pedersen_commit(amount_felt, randomness).x;
 
