@@ -243,6 +243,9 @@ mod MeteredBilling {
         worker_gpus: Map<ContractAddress, WorkerGPU>,
         worker_registered: Map<ContractAddress, bool>,
 
+        // SECURITY: Track which hours have been checkpointed (prevents duplicate billing)
+        job_hour_checkpointed: Map<(u256, u32), bool>,  // (job_id, hour_number) -> checkpointed
+
         // Stats
         total_metered_jobs: u64,
         total_compute_hours: u256,
@@ -456,6 +459,12 @@ mod MeteredBilling {
             assert(hour_number <= job.max_hours, 'Exceeds max hours');
             assert(gpu_utilization <= 100, 'Invalid utilization');
 
+            // SECURITY: Prevent duplicate billing for same hour
+            assert!(!self.job_hour_checkpointed.read((job_id, hour_number)), "Hour already checkpointed");
+
+            // Mark hour as checkpointed BEFORE creating checkpoint (CEI pattern)
+            self.job_hour_checkpointed.write((job_id, hour_number), true);
+
             // Create checkpoint
             let checkpoint_id = self.checkpoint_counter.read() + 1;
             self.checkpoint_counter.write(checkpoint_id);
@@ -524,6 +533,12 @@ mod MeteredBilling {
             assert(caller == job.worker, 'Only worker');
             assert(job.is_active, 'Job not active');
             assert(hour_number <= job.max_hours, 'Exceeds max hours');
+
+            // SECURITY: Prevent duplicate billing for same hour
+            assert!(!self.job_hour_checkpointed.read((job_id, hour_number)), "Hour already checkpointed");
+
+            // Mark hour as checkpointed BEFORE creating checkpoint (CEI pattern)
+            self.job_hour_checkpointed.write((job_id, hour_number), true);
 
             // Verify enclave is whitelisted
             let verifier = IProofVerifierDispatcher {
@@ -738,16 +753,22 @@ mod MeteredBilling {
 
         fn set_proof_gated_payment(ref self: ContractState, payment: ContractAddress) {
             self._only_owner();
+            // SECURITY: Zero address validation
+            assert!(!payment.is_zero(), "Payment contract cannot be zero address");
             self.proof_gated_payment.write(payment);
         }
 
         fn set_proof_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._only_owner();
+            // SECURITY: Zero address validation
+            assert!(!verifier.is_zero(), "Verifier cannot be zero address");
             self.proof_verifier.write(verifier);
         }
 
         fn set_optimistic_tee(ref self: ContractState, tee: ContractAddress) {
             self._only_owner();
+            // SECURITY: Zero address validation
+            assert!(!tee.is_zero(), "TEE contract cannot be zero address");
             self.optimistic_tee.write(tee);
         }
     }

@@ -367,7 +367,10 @@ mod ProverStaking {
     impl ProverStakingImpl of IProverStaking<ContractState> {
         fn stake(ref self: ContractState, amount: u256, gpu_tier: GpuTier) {
             assert!(!self.paused.read(), "Contract is paused");
-            
+
+            // SECURITY: Amount validation
+            assert!(amount > 0, "Amount must be greater than 0");
+
             let caller = get_caller_address();
             let config = self.config.read();
             
@@ -416,9 +419,12 @@ mod ProverStaking {
         }
 
         fn request_unstake(ref self: ContractState, amount: u256) {
+            // SECURITY: Amount validation
+            assert!(amount > 0, "Amount must be greater than 0");
+
             let caller = get_caller_address();
             let mut stake = self.stakes.read(caller);
-            
+
             assert!(stake.amount >= amount, "Insufficient stake");
             assert!(stake.locked_amount == 0, "Pending unstake exists");
             

@@ -747,6 +747,9 @@ mod PaymentRouter {
             // SECURITY: Pause check
             self._when_not_paused();
 
+            // SECURITY: Amount validation
+            assert!(amount > 0, "Amount must be greater than 0");
+
             let caller = get_caller_address();
 
             // SECURITY: Rate limit check
@@ -792,6 +795,9 @@ mod PaymentRouter {
             self._reentrancy_guard_start();
             // SECURITY: Pause check
             self._when_not_paused();
+
+            // SECURITY: Amount validation
+            assert!(usd_amount > 0, "USD amount must be greater than 0");
 
             let caller = get_caller_address();
 
@@ -839,6 +845,12 @@ mod PaymentRouter {
             // SECURITY: Pause check
             self._when_not_paused();
 
+            // SECURITY: Amount validation
+            assert!(amount > 0, "Amount must be greater than 0");
+
+            // SECURITY: Commitment validation (non-zero)
+            assert!(commitment != 0, "Invalid commitment");
+
             let caller = get_caller_address();
 
             // Verify commitment not already used
@@ -866,12 +878,19 @@ mod PaymentRouter {
             // SECURITY: Pause check
             self._when_not_paused();
 
+            // SECURITY: Amount validation
+            assert!(usd_amount > 0, "USD amount must be greater than 0");
+
+            // SECURITY: Nullifier validation (non-zero)
+            assert!(nullifier != 0, "Invalid nullifier");
+
             // Verify nullifier not already used (prevent double-spend)
             assert(!self.privacy_nullifiers.read(nullifier), 'Nullifier used');
 
-            // Verify ZK proof
-            // In production: call proof verifier contract
-            assert(proof.len() > 0, 'Invalid proof');
+            // Verify ZK proof structure
+            // TODO: In production, integrate with ProofVerifier contract for full ZK verification
+            // Current check ensures proof array is not empty and has minimum expected elements
+            assert!(proof.len() >= 4, "Proof must have at least 4 elements");
 
             // Mark nullifier as used
             self.privacy_nullifiers.write(nullifier, true);
@@ -968,6 +987,9 @@ mod PaymentRouter {
 
         fn set_obelysk_router(ref self: ContractState, router: ContractAddress) {
             self._only_owner();
+            // SECURITY: Zero address validation
+            assert!(!router.is_zero(), "Router cannot be zero address");
+
             let old_router = self.obelysk_router.read();
             self.obelysk_router.write(router);
 
@@ -980,6 +1002,9 @@ mod PaymentRouter {
 
         fn set_staker_rewards_pool(ref self: ContractState, pool: ContractAddress) {
             self._only_owner();
+            // SECURITY: Zero address validation
+            assert!(!pool.is_zero(), "Pool cannot be zero address");
+
             let old_pool = self.staker_rewards_pool.read();
             self.staker_rewards_pool.write(pool);
 
@@ -999,6 +1024,9 @@ mod PaymentRouter {
             // In production: verify caller is authorized JobManager
             // For now, allow owner to register jobs
             self._only_owner();
+
+            // SECURITY: Worker address validation
+            assert!(!worker.is_zero(), "Worker cannot be zero address");
 
             self.job_worker.write(job_id, worker);
             self.job_privacy_enabled.write(job_id, privacy_enabled);
