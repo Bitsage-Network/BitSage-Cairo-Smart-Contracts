@@ -451,6 +451,12 @@ mod CDCPool {
             priority: u8,
             max_latency: u64
         ) -> AllocationResult {
+            // Input validation
+            assert!(priority <= 10, "Priority must be 0-10");
+            assert!(max_latency > 0, "Max latency must be positive");
+            assert!(max_latency <= 604800, "Max latency exceeds 7 days");
+            assert!(requirements.min_memory_gb > 0, "Memory requirement must be positive");
+
             // Simplified allocation algorithm - find first available worker
             let zero_address: ContractAddress = 0.try_into().unwrap();
             let mut best_worker = zero_address;

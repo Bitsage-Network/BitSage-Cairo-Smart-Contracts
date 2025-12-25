@@ -249,6 +249,7 @@ mod OTCOrderbook {
 
     const BPS_DENOMINATOR: u256 = 10000;
     const MAX_PAIRS: u8 = 10;
+    const MAX_ORDER_SIZE: u256 = 10000000_000000000000000000; // 10M SAGE max per order
 
     #[storage]
     struct Storage {
@@ -812,6 +813,7 @@ mod OTCOrderbook {
 
             // Validate order size
             assert!(amount >= pair.min_order_size, "Order below minimum size");
+            assert!(amount <= MAX_ORDER_SIZE, "Order exceeds maximum size");
 
             // Validate price tick
             assert!(price > 0, "Price must be > 0");
