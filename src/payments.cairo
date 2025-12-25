@@ -11,3 +11,7 @@ pub mod proof_gated_payment;
 //! Each hour of compute generates a proof checkpoint for billing
 //! Supports STWO proofs and TEE attestations
 pub mod metered_billing;
+
+//! OTC Orderbook - Decentralized limit order book for SAGE trading
+//! Supports limit/market orders, partial fills, maker/taker fees
+pub mod otc_orderbook;
