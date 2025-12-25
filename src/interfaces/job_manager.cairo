@@ -269,4 +269,21 @@ pub trait IJobManager<TContractState> {
 
     /// Check if proof is verified and payment is ready for a job
     fn is_proof_payment_ready(self: @TContractState, job_id: JobId) -> bool;
+
+    // ============================================================================
+    // PHASE 4: Job Cancellation
+    // ============================================================================
+
+    /// Cancel an expired job and refund the client
+    /// Can be called by anyone (keeper-style) for expired jobs
+    /// @param job_id: The job to cancel
+    /// @return success: Whether the cancellation succeeded
+    fn cancel_expired_job(ref self: TContractState, job_id: JobId) -> bool;
+
+    /// Client can cancel their own job if still in Queued state
+    /// @param job_id: The job to cancel
+    fn cancel_job(ref self: TContractState, job_id: JobId);
+
+    /// Check if a job can be cancelled
+    fn can_cancel_job(self: @TContractState, job_id: JobId) -> bool;
 } 

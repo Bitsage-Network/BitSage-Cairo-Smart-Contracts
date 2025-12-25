@@ -96,6 +96,12 @@ mod CDCPool {
         slash_records: Map<felt252, SlashRecord>,
         next_slash_id: felt252,
         slash_percentages: Map<u8, u8>, // reason -> percentage
+
+        // Slash challenge tracking
+        slash_challenged: Map<felt252, bool>,        // slash_id -> is_challenged
+        challenge_evidence: Map<felt252, felt252>,   // slash_id -> evidence_hash
+        challenge_deadline: Map<felt252, u64>,       // slash_id -> challenge deadline
+        challenge_deposit: u256,                     // Required deposit to challenge (refunded if successful)
         
         // Rewards
         pending_rewards: Map<felt252, u256>,
@@ -110,6 +116,9 @@ mod CDCPool {
         // Network stats
         total_jobs_processed: u32,
         last_heartbeat: Map<felt252, u64>, // worker_id -> timestamp
+
+        // Security: Reentrancy guard
+        reentrancy_locked: bool,
     }
 
     #[event]
@@ -124,6 +133,28 @@ mod CDCPool {
         JobAllocated: JobAllocated,
         WorkerReserved: WorkerReserved,
         WorkerReleased: WorkerReleased,
+        SlashChallenged: SlashChallenged,
+        ChallengeResolved: ChallengeResolved,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct SlashChallenged {
+        #[key]
+        slash_id: felt252,
+        #[key]
+        worker: ContractAddress,
+        challenger: ContractAddress,
+        evidence_hash: felt252,
+        deadline: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ChallengeResolved {
+        #[key]
+        slash_id: felt252,
+        upheld: bool,
+        deposit_returned: bool,
+        timestamp: u64,
     }
 
     #[constructor]
@@ -298,6 +329,7 @@ mod CDCPool {
         // Staking Functions
 
         fn stake(ref self: ContractState, amount: u256, lock_period: u64) {
+            self._reentrancy_guard_start();
             assert!(!self.paused.read(), "Contract is paused");
             assert!(amount >= self.min_stake.read(), "Amount below minimum stake");
             
@@ -321,9 +353,11 @@ mod CDCPool {
                 amount,
                 total_stake: stake_info.amount,
             }));
+            self._reentrancy_guard_end();
         }
 
         fn request_unstake(ref self: ContractState, amount: u256) -> u64 {
+            self._reentrancy_guard_start();
             let caller = get_caller_address();
             let stake_info = self.stakes.read(caller);
             // Cairo 2.12.0: Better stake validation with clear error messages
@@ -347,7 +381,8 @@ mod CDCPool {
                 amount,
                 unlock_time,
             }));
-            
+
+            self._reentrancy_guard_end();
             unlock_time
         }
 
@@ -358,6 +393,7 @@ mod CDCPool {
         }
 
         fn complete_unstake(ref self: ContractState) {
+            self._reentrancy_guard_start();
             let caller = get_caller_address();
             // Find and process unstake request for caller
             // Simplified implementation - in reality would need to track individual requests
@@ -384,6 +420,7 @@ mod CDCPool {
                     amount: stake_info.amount,
                 }));
             }
+            self._reentrancy_guard_end();
         }
 
         fn increase_stake(ref self: ContractState, additional_amount: u256) {
@@ -623,11 +660,52 @@ mod CDCPool {
             worker_id: WorkerId,
             evidence: Array<felt252>
         ) {
-            // Simplified implementation - in reality would start dispute process
+            self._reentrancy_guard_start();
+
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
             assert!(owner == caller, "Not worker owner");
+
+            // Find the most recent slash for this worker
+            let slash_id = self.next_slash_id.read() - 1;
+            let slash_record = self.slash_records.read(slash_id);
+            assert!(slash_record.worker == owner, "No slash found for worker");
+
+            // Check slash hasn't already been challenged
+            assert!(!self.slash_challenged.read(slash_id), "Already challenged");
+
+            // Check challenge deadline (7 days from slash)
+            let challenge_window: u64 = 604800; // 7 days
+            assert!(
+                get_block_timestamp() < slash_record.timestamp + challenge_window,
+                "Challenge window expired"
+            );
+
+            // Collect challenge deposit
+            let deposit = self.challenge_deposit.read();
+            if deposit > 0 {
+                let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+                sage_token.transfer_from(caller, starknet::get_contract_address(), deposit);
+            }
+
+            // Record challenge
+            let evidence_hash = if evidence.len() > 0 { *evidence.at(0) } else { 0 };
+            let deadline = get_block_timestamp() + 604800; // 7 days to resolve
+
+            self.slash_challenged.write(slash_id, true);
+            self.challenge_evidence.write(slash_id, evidence_hash);
+            self.challenge_deadline.write(slash_id, deadline);
+
+            self.emit(SlashChallenged {
+                slash_id,
+                worker: owner,
+                challenger: caller,
+                evidence_hash,
+                deadline,
+            });
+
+            self._reentrancy_guard_end();
         }
 
         fn resolve_slash_challenge(
@@ -635,14 +713,56 @@ mod CDCPool {
             worker_id: WorkerId,
             upheld: bool
         ) {
+            self._reentrancy_guard_start();
+
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Only admin can resolve");
-            
+
+            let worker_key = worker_id.value;
+            let owner = self.worker_owners.read(worker_key);
+
+            // Find the challenged slash
+            let slash_id = self.next_slash_id.read() - 1;
+            assert!(self.slash_challenged.read(slash_id), "Slash not challenged");
+
+            let slash_record = self.slash_records.read(slash_id);
+            let deposit = self.challenge_deposit.read();
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+
             if !upheld {
-                // Restore worker status
-                let worker_key = worker_id.value;
+                // Challenge successful - restore worker and refund stake + deposit
                 self.worker_status.write(worker_key, WorkerStatus::Active);
+
+                // Refund slashed amount
+                let mut stake_info = self.stakes.read(owner);
+                stake_info.amount += slash_record.amount;
+                self.stakes.write(owner, stake_info);
+
+                // Return challenge deposit
+                if deposit > 0 {
+                    sage_token.transfer(owner, deposit);
+                }
+
+                self.emit(ChallengeResolved {
+                    slash_id,
+                    upheld: false,
+                    deposit_returned: true,
+                    timestamp: get_block_timestamp(),
+                });
+            } else {
+                // Slash upheld - challenger loses deposit (goes to treasury/protocol)
+                self.emit(ChallengeResolved {
+                    slash_id,
+                    upheld: true,
+                    deposit_returned: false,
+                    timestamp: get_block_timestamp(),
+                });
             }
+
+            // Clear challenge state
+            self.slash_challenged.write(slash_id, false);
+
+            self._reentrancy_guard_end();
         }
 
         // Reward Distribution Functions
@@ -675,19 +795,22 @@ mod CDCPool {
         }
 
         fn claim_rewards(ref self: ContractState, worker_id: WorkerId) -> u256 {
+            self._reentrancy_guard_start();
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
             assert!(owner == caller, "Not worker owner");
-            
+
             let pending = self.pending_rewards.read(worker_key);
             if pending > 0 {
+                // SECURITY: Update state BEFORE external call (CEI pattern)
                 self.pending_rewards.write(worker_key, 0);
-                
+
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
                 sage_token.transfer(caller, pending);
             }
-            
+
+            self._reentrancy_guard_end();
             pending
         }
 
@@ -991,14 +1114,42 @@ mod CDCPool {
         ) {
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Only admin");
-            
+
             let worker_key = worker_id.value;
             self.worker_status.write(worker_key, WorkerStatus::Banned);
-            
+
             let current_status = self.worker_status.read(worker_key);
             if current_status == WorkerStatus::Active {
                 self.active_workers.write(self.active_workers.read() - 1);
             }
+        }
+    }
+
+    // =========================================================================
+    // INTERNAL HELPER FUNCTIONS
+    // =========================================================================
+
+    #[generate_trait]
+    impl InternalImpl of InternalTrait {
+        /// Start reentrancy guard
+        fn _reentrancy_guard_start(ref self: ContractState) {
+            assert!(!self.reentrancy_locked.read(), "ReentrancyGuard: reentrant call");
+            self.reentrancy_locked.write(true);
+        }
+
+        /// End reentrancy guard
+        fn _reentrancy_guard_end(ref self: ContractState) {
+            self.reentrancy_locked.write(false);
+        }
+
+        /// Check if caller is admin
+        fn _only_admin(self: @ContractState) {
+            assert!(get_caller_address() == self.admin.read(), "Only admin");
+        }
+
+        /// Check if contract is not paused
+        fn _when_not_paused(self: @ContractState) {
+            assert!(!self.paused.read(), "Contract is paused");
         }
     }
 }

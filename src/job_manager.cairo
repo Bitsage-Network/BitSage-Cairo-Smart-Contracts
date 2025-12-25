@@ -1060,6 +1060,76 @@ mod JobManager {
 
             proof_payment.is_payment_ready(job_id.value)
         }
+
+        // ========================================================================
+        // PHASE 4: Job Cancellation
+        // ========================================================================
+
+        /// Cancel an expired job - can be called by anyone (keeper-style)
+        fn cancel_expired_job(ref self: ContractState, job_id: JobId) -> bool {
+            self._check_not_paused();
+            self._start_nonreentrant();
+
+            let success = self._cancel_expired_job(job_id);
+
+            self._end_nonreentrant();
+            success
+        }
+
+        /// Client can cancel their own job if still queued
+        fn cancel_job(ref self: ContractState, job_id: JobId) {
+            self._check_not_paused();
+            self._start_nonreentrant();
+
+            let Some(job_key) = job_id.value.try_into() else {
+                panic!("Invalid job ID");
+            };
+
+            let client = self.job_clients.read(job_key);
+            let caller = get_caller_address();
+            assert!(caller == client, "Only job client can cancel");
+
+            let state = self.job_states.read(job_key);
+            assert!(state == JobState::Queued, "Can only cancel queued jobs");
+
+            let payment = self.job_payments.read(job_key);
+
+            // Update state
+            self.job_states.write(job_key, JobState::Cancelled);
+            self.active_jobs.write(self.active_jobs.read() - 1);
+
+            // Refund client
+            let token = IERC20Dispatcher { contract_address: self.payment_token.read() };
+            let refund_success = token.transfer(client, payment);
+            assert!(refund_success, "Refund transfer failed");
+
+            self.emit(JobCancelled {
+                job_id: job_id.value,
+                client,
+                reason: 'client_cancelled',
+                refund_amount: payment
+            });
+
+            self._end_nonreentrant();
+        }
+
+        /// Check if a job can be cancelled
+        fn can_cancel_job(self: @ContractState, job_id: JobId) -> bool {
+            let Some(job_key) = job_id.value.try_into() else {
+                return false;
+            };
+
+            let state = self.job_states.read(job_key);
+            let deadline = self.job_deadlines.read(job_key);
+            let current_time = get_block_timestamp();
+
+            // Can cancel if: expired and (Queued or Processing), OR just Queued (client cancel)
+            match state {
+                JobState::Queued => true,
+                JobState::Processing => current_time > deadline,
+                _ => false,
+            }
+        }
     }
 
     // Internal helper functions
