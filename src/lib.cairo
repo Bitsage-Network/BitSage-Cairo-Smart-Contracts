@@ -80,4 +80,8 @@ pub mod tokenomics;
 // Features: OTC desk (no AMM dependency), staked SAGE credits, privacy payments
 pub mod payments;
 
+// Growth - Adoption and referral tools
+// Features: Tiered referral rewards, affiliate tracking
+pub mod growth;
+
 // Tests are located in the tests/ directory and managed by snforge

@@ -163,6 +163,21 @@ pub trait IOTCOrderbook<TContractState> {
     fn cancel_all_orders(ref self: TContractState);
 
     // =========================================================================
+    // Batch Operations (gas efficient)
+    // =========================================================================
+
+    /// Place multiple limit orders in one transaction
+    /// @param orders: Array of (pair_id, side, price, amount, expires_in)
+    /// @return order_ids: Array of created order IDs
+    fn batch_place_orders(
+        ref self: TContractState,
+        orders: Array<(u8, OrderSide, u256, u256, u64)>
+    ) -> Array<u256>;
+
+    /// Cancel multiple orders in one transaction
+    fn batch_cancel_orders(ref self: TContractState, order_ids: Array<u256>);
+
+    // =========================================================================
     // View Functions
     // =========================================================================
 
@@ -395,84 +410,7 @@ mod OTCOrderbook {
             expires_in: u64
         ) -> u256 {
             self._require_not_paused();
-
-            let caller = get_caller_address();
-            let now = get_block_timestamp();
-            let config = self.config.read();
-
-            // Validate pair
-            let pair = self.pairs.read(pair_id);
-            assert!(pair.is_active, "Trading pair not active");
-
-            // Validate order size
-            assert!(amount >= pair.min_order_size, "Order below minimum size");
-
-            // Validate price tick
-            assert!(price > 0, "Price must be > 0");
-            assert!(price % pair.tick_size == 0, "Price must be multiple of tick size");
-
-            // Check user order limit
-            let user_orders = self.user_order_count.read(caller);
-            assert!(user_orders < config.max_orders_per_user, "Max orders reached");
-
-            // Calculate expiration
-            let expires_at = if expires_in > 0 {
-                now + expires_in
-            } else if config.default_expiry_secs > 0 {
-                now + config.default_expiry_secs
-            } else {
-                0 // No expiry
-            };
-
-            // Create order
-            let order_id = self.order_count.read() + 1;
-            self.order_count.write(order_id);
-
-            let order = Order {
-                order_id,
-                maker: caller,
-                pair_id,
-                side,
-                order_type: OrderType::Limit,
-                price,
-                amount,
-                remaining: amount,
-                status: OrderStatus::Open,
-                created_at: now,
-                expires_at,
-            };
-
-            // Transfer tokens to orderbook
-            self._lock_order_funds(caller, @pair, @order);
-
-            // Store order
-            self.orders.write(order_id, order);
-
-            // Add to user's order list
-            self.user_orders.write((caller, user_orders), order_id);
-            self.user_order_count.write(caller, user_orders + 1);
-
-            // Update price level
-            self._add_to_price_level(pair_id, side, price, order_id);
-
-            // Update best bid/ask
-            self._update_best_prices(pair_id, side, price);
-
-            self.emit(OrderPlaced {
-                order_id,
-                maker: caller,
-                pair_id,
-                side,
-                order_type: OrderType::Limit,
-                price,
-                amount,
-                expires_at,
-            });
-
-            // Try to match order
-            self._try_match_order(order_id);
-
-            order_id
+            self._place_limit_order_internal(pair_id, side, price, amount, expires_in)
         }
 
         fn place_market_order(
@@ -598,6 +536,81 @@ mod OTCOrderbook {
                         order_id,
                         maker: caller,
                         remaining_amount: order.remaining,
+                    });
+                }
+
+                i += 1;
+            };
+        }
+
+        // =========================================================================
+        // Batch Operations
+        // =========================================================================
+
+        fn batch_place_orders(
+            ref self: ContractState,
+            orders: Array<(u8, OrderSide, u256, u256, u64)>
+        ) -> Array<u256> {
+            self._require_not_paused();
+
+            let len = orders.len();
+            assert!(len > 0, "Empty order array");
+            assert!(len <= 20, "Max 20 orders per batch");
+
+            let mut order_ids: Array<u256> = array![];
+            let mut i: u32 = 0;
+
+            loop {
+                if i >= len {
+                    break;
+                }
+
+                let (pair_id, side, price, amount, expires_in) = *orders.at(i);
+
+                // Place each order (reusing existing logic)
+                let order_id = self._place_limit_order_internal(pair_id, side, price, amount, expires_in);
+                order_ids.append(order_id);
+
+                i += 1;
+            };
+
+            order_ids
+        }
+
+        fn batch_cancel_orders(ref self: ContractState, order_ids: Array<u256>) {
+            let len = order_ids.len();
+            assert!(len > 0, "Empty order array");
+            assert!(len <= 50, "Max 50 cancellations per batch");
+
+            let caller = get_caller_address();
+            let mut i: u32 = 0;
+
+            loop {
+                if i >= len {
+                    break;
+                }
+
+                let order_id = *order_ids.at(i);
+                let order = self.orders.read(order_id);
+
+                // Only cancel if owned by caller and cancellable
+                if order.maker == caller
+                    && (order.status == OrderStatus::Open || order.status == OrderStatus::PartialFill) {
+
+                    let remaining = order.remaining;
+                    self._refund_order(order_id);
+
+                    let mut updated_order = order;
+                    updated_order.status = OrderStatus::Cancelled;
+                    updated_order.remaining = 0;
+                    self.orders.write(order_id, updated_order);
+
+                    self._remove_from_price_level(order.pair_id, order.side, order.price, order_id);
+
+                    self.emit(OrderCancelled {
+                        order_id,
+                        maker: caller,
+                        remaining_amount: remaining,
                     });
                 }
 
@@ -768,6 +781,94 @@ mod OTCOrderbook {
 
         fn _require_not_paused(self: @ContractState) {
             assert!(!self.config.read().paused, "Orderbook paused");
+        }
+
+        /// Internal function for placing limit orders (used by both single and batch)
+        fn _place_limit_order_internal(
+            ref self: ContractState,
+            pair_id: u8,
+            side: OrderSide,
+            price: u256,
+            amount: u256,
+            expires_in: u64
+        ) -> u256 {
+            let caller = get_caller_address();
+            let now = get_block_timestamp();
+            let config = self.config.read();
+
+            // Validate pair
+            let pair = self.pairs.read(pair_id);
+            assert!(pair.is_active, "Trading pair not active");
+
+            // Validate order size
+            assert!(amount >= pair.min_order_size, "Order below minimum size");
+
+            // Validate price tick
+            assert!(price > 0, "Price must be > 0");
+            assert!(price % pair.tick_size == 0, "Price must be multiple of tick size");
+
+            // Check user order limit
+            let user_orders = self.user_order_count.read(caller);
+            assert!(user_orders < config.max_orders_per_user, "Max orders reached");
+
+            // Calculate expiration
+            let expires_at = if expires_in > 0 {
+                now + expires_in
+            } else if config.default_expiry_secs > 0 {
+                now + config.default_expiry_secs
+            } else {
+                0 // No expiry
+            };
+
+            // Create order
+            let order_id = self.order_count.read() + 1;
+            self.order_count.write(order_id);
+
+            let order = Order {
+                order_id,
+                maker: caller,
+                pair_id,
+                side,
+                order_type: OrderType::Limit,
+                price,
+                amount,
+                remaining: amount,
+                status: OrderStatus::Open,
+                created_at: now,
+                expires_at,
+            };
+
+            // Transfer tokens to orderbook
+            self._lock_order_funds(caller, @pair, @order);
+
+            // Store order
+            self.orders.write(order_id, order);
+
+            // Add to user's order list
+            self.user_orders.write((caller, user_orders), order_id);
+            self.user_order_count.write(caller, user_orders + 1);
+
+            // Update price level
+            self._add_to_price_level(pair_id, side, price, order_id);
+
+            // Update best bid/ask
+            self._update_best_prices(pair_id, side, price);
+
+            self.emit(OrderPlaced {
+                order_id,
+                maker: caller,
+                pair_id,
+                side,
+                order_type: OrderType::Limit,
+                price,
+                amount,
+                expires_at,
+            });
+
+            // Try to match order
+            self._try_match_order(order_id);
+
+            order_id
         }
 
         fn _lock_order_funds(
