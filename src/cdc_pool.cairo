@@ -58,6 +58,7 @@ mod CDCPool {
         // Shared constants
         SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE, BPS_DENOMINATOR
     };
+    use core::num::traits::Zero;
 
     // Helper constants
     const ZERO_ADDRESS: felt252 = 0;
@@ -171,6 +172,9 @@ mod CDCPool {
         sage_token: ContractAddress,
         min_stake: u256
     ) {
+        assert!(!admin.is_zero(), "CDC: invalid admin");
+        assert!(!sage_token.is_zero(), "CDC: invalid token");
+
         self.admin.write(admin);
         self.sage_token.write(sage_token);
         self.min_stake.write(min_stake);
@@ -344,7 +348,8 @@ mod CDCPool {
             let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             
             // Transfer tokens from caller
-            sage_token.transfer_from(caller, starknet::get_contract_address(), amount);
+            let transfer_success = sage_token.transfer_from(caller, starknet::get_contract_address(), amount);
+            assert!(transfer_success, "CDC: transfer_from failed");
             
             // Update stake info
             let mut stake_info = self.stakes.read(caller);
@@ -408,7 +413,8 @@ mod CDCPool {
             
             if stake_info.locked_until <= get_block_timestamp() {
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                sage_token.transfer(caller, stake_info.amount);
+                let transfer_success = sage_token.transfer(caller, stake_info.amount);
+                assert!(transfer_success, "CDC: transfer failed");
                 
                 let empty_stake = StakeInfo {
                     amount: 0,
@@ -698,7 +704,8 @@ mod CDCPool {
             let deposit = self.challenge_deposit.read();
             if deposit > 0 {
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                sage_token.transfer_from(caller, starknet::get_contract_address(), deposit);
+                let transfer_success = sage_token.transfer_from(caller, starknet::get_contract_address(), deposit);
+                assert!(transfer_success, "CDC: transfer_from failed");
             }
 
             // Record challenge
@@ -752,7 +759,8 @@ mod CDCPool {
 
                 // Return challenge deposit
                 if deposit > 0 {
-                    sage_token.transfer(owner, deposit);
+                    let transfer_success = sage_token.transfer(owner, deposit);
+                    assert!(transfer_success, "CDC: transfer failed");
                 }
 
                 self.emit(ChallengeResolved {
@@ -819,7 +827,8 @@ mod CDCPool {
                 self.pending_rewards.write(worker_key, 0);
 
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                sage_token.transfer(caller, pending);
+                let transfer_success = sage_token.transfer(caller, pending);
+                assert!(transfer_success, "CDC: transfer failed");
             }
 
             self._reentrancy_guard_end();

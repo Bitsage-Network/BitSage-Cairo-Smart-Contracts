@@ -680,12 +680,6 @@ mod JobManager {
         fn get_job_details(self: @ContractState, job_id: JobId) -> JobDetails {
             let job_key: felt252 = job_id.value.try_into().unwrap();
             let job_type = self.job_types.read(job_key);
-            let _job_model_id = self.job_model_ids.read(job_key);
-            let _job_input_hash = self.job_input_hashes.read(job_key);
-            let _job_output_format = self.job_output_formats.read(job_key);
-            let _job_verification_method = self.job_verification_methods.read(job_key);
-            let _job_max_reward = self.job_max_rewards.read(job_key);
-            let _job_deadline = self.job_deadlines.read(job_key);
             let state = self.job_states.read(job_key);
             let client = self.job_clients.read(job_key);
             let worker = self.job_workers.read(job_key);

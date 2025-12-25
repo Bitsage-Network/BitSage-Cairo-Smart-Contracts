@@ -373,6 +373,11 @@ mod OTCOrderbook {
         fee_recipient: ContractAddress,
         usdc_token: ContractAddress,
     ) {
+        assert!(!owner.is_zero(), "OTC: invalid owner");
+        assert!(!sage_token.is_zero(), "OTC: invalid SAGE token");
+        assert!(!fee_recipient.is_zero(), "OTC: invalid fee recipient");
+        assert!(!usdc_token.is_zero(), "OTC: invalid USDC token");
+
         self.owner.write(owner);
         self.sage_token.write(sage_token);
         self.fee_recipient.write(fee_recipient);

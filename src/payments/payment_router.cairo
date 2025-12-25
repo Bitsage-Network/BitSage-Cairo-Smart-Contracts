@@ -721,6 +721,13 @@ mod PaymentRouter {
         staker_rewards_pool: ContractAddress,
         treasury_address: ContractAddress
     ) {
+        assert!(!owner.is_zero(), "Router: invalid owner");
+        assert!(!sage_address.is_zero(), "Router: invalid SAGE");
+        assert!(!oracle_address.is_zero(), "Router: invalid oracle");
+        assert!(!obelysk_router.is_zero(), "Router: invalid obelysk");
+        assert!(!staker_rewards_pool.is_zero(), "Router: invalid rewards");
+        assert!(!treasury_address.is_zero(), "Router: invalid treasury");
+
         self.owner.write(owner);
         self.obelysk_router.write(obelysk_router);
         self.staker_rewards_pool.write(staker_rewards_pool);
