@@ -179,6 +179,9 @@ mod PrivacyRouter {
 
         // Emergency controls
         paused: bool,
+
+        // Security: Reentrancy guard
+        reentrancy_locked: bool,
     }
 
     #[event]
@@ -321,7 +324,13 @@ mod PrivacyRouter {
             encrypted_amount: ElGamalCiphertext,
             proof: EncryptionProof
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
             self._require_not_paused();
+
+            // SECURITY: Amount validation
+            assert!(amount > 0, "Amount must be greater than 0");
+
             let caller = get_caller_address();
 
             // Verify account is registered
@@ -357,6 +366,9 @@ mod PrivacyRouter {
 
             // Try to advance epoch
             self._try_advance_epoch();
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn withdraw(
@@ -365,7 +377,13 @@ mod PrivacyRouter {
             encrypted_delta: ElGamalCiphertext,
             proof: EncryptionProof
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
             self._require_not_paused();
+
+            // SECURITY: Amount validation
+            assert!(amount > 0, "Amount must be greater than 0");
+
             let caller = get_caller_address();
 
             // Verify account is registered
@@ -400,12 +418,17 @@ mod PrivacyRouter {
                 public_amount: amount,
                 timestamp: get_block_timestamp(),
             });
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn private_transfer(
             ref self: ContractState,
             transfer: PrivateTransfer
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
             self._require_not_paused();
             let caller = get_caller_address();
 
@@ -461,6 +484,9 @@ mod PrivacyRouter {
             });
 
             self._try_advance_epoch();
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn receive_worker_payment(
@@ -470,7 +496,14 @@ mod PrivacyRouter {
             sage_amount: u256,
             encrypted_amount: ElGamalCiphertext
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
             self._require_not_paused();
+
+            // SECURITY: Validation
+            assert!(sage_amount > 0, "Amount must be greater than 0");
+            assert!(!worker.is_zero(), "Worker cannot be zero address");
+
             let caller = get_caller_address();
 
             // Only PaymentRouter can send worker payments
@@ -505,6 +538,9 @@ mod PrivacyRouter {
                 worker,
                 timestamp: get_block_timestamp(),
             });
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn claim_worker_payment(
@@ -512,6 +548,8 @@ mod PrivacyRouter {
             job_id: u256,
             decryption_proof: EncryptionProof
         ) {
+            // SECURITY: Reentrancy protection
+            self._reentrancy_guard_start();
             self._require_not_paused();
             let caller = get_caller_address();
 
@@ -548,6 +586,9 @@ mod PrivacyRouter {
                 worker: caller,
                 timestamp: get_block_timestamp(),
             });
+
+            // SECURITY: Release reentrancy lock
+            self._reentrancy_guard_end();
         }
 
         fn rollup_balance(ref self: ContractState) {
@@ -606,6 +647,18 @@ mod PrivacyRouter {
 
         fn _require_not_paused(self: @ContractState) {
             assert!(!self.paused.read(), "Contract is paused");
+        }
+
+        // =========================================================================
+        // Reentrancy Guard - Prevents reentrant calls to critical functions
+        // =========================================================================
+        fn _reentrancy_guard_start(ref self: ContractState) {
+            assert!(!self.reentrancy_locked.read(), "ReentrancyGuard: reentrant call");
+            self.reentrancy_locked.write(true);
+        }
+
+        fn _reentrancy_guard_end(ref self: ContractState) {
+            self.reentrancy_locked.write(false);
         }
 
         fn _try_advance_epoch(ref self: ContractState) {

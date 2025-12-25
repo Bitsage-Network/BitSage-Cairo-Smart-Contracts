@@ -179,6 +179,17 @@ pub trait IMeteredBilling<TContractState> {
     fn set_proof_gated_payment(ref self: TContractState, payment: ContractAddress);
     fn set_proof_verifier(ref self: TContractState, verifier: ContractAddress);
     fn set_optimistic_tee(ref self: TContractState, tee: ContractAddress);
+
+    // === Pausable ===
+
+    /// Pause the contract (owner only)
+    fn pause(ref self: TContractState);
+
+    /// Unpause the contract (owner only)
+    fn unpause(ref self: TContractState);
+
+    /// Check if contract is paused
+    fn is_paused(self: @TContractState) -> bool;
 }
 
 #[starknet::contract]
@@ -250,6 +261,9 @@ mod MeteredBilling {
         total_metered_jobs: u64,
         total_compute_hours: u256,
         total_sage_distributed: u256,
+
+        // Security: Emergency controls
+        paused: bool,
     }
 
     #[event]
@@ -262,6 +276,18 @@ mod MeteredBilling {
         CheckpointPaid: CheckpointPaid,
         WorkerGPURegistered: WorkerGPURegistered,
         HourlyRateUpdated: HourlyRateUpdated,
+        ContractPaused: ContractPaused,
+        ContractUnpaused: ContractUnpaused,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractPaused {
+        account: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct ContractUnpaused {
+        account: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -373,10 +399,18 @@ mod MeteredBilling {
             verification_method: VerificationMethod,
             privacy_enabled: bool
         ) {
+            // SECURITY: Pause check
+            self._require_not_paused();
+
             let client = get_caller_address();
-            assert(!self.job_exists.read(job_id), 'Job already exists');
-            assert(!worker.is_zero(), 'Invalid worker');
-            assert(max_hours > 0, 'Invalid max hours');
+
+            // SECURITY: Input validation
+            assert!(job_id != 0, "Job ID cannot be zero");
+            assert!(!self.job_exists.read(job_id), "Job already exists");
+            assert!(!worker.is_zero(), "Worker cannot be zero address");
+            assert!(!client.is_zero(), "Client cannot be zero address");
+            assert!(max_hours > 0, "Max hours must be greater than 0");
+            assert!(max_hours <= 8760, "Max hours cannot exceed 1 year");
 
             // Get hourly rate for this GPU tier
             let hourly_rate = self._get_rate_for_tier(gpu_tier);
@@ -449,7 +483,10 @@ mod MeteredBilling {
             proof_data: Array<felt252>,
             proof_hash: felt252
         ) {
-            assert(self.job_exists.read(job_id), 'Job not found');
+            // SECURITY: Pause check
+            self._require_not_paused();
+
+            assert!(self.job_exists.read(job_id), "Job not found");
 
             let job = self.metered_jobs.read(job_id);
             let caller = get_caller_address();
@@ -613,8 +650,14 @@ mod MeteredBilling {
         }
 
         fn batch_verify_checkpoints(ref self: ContractState, checkpoint_ids: Array<u256>) {
-            let mut i: u32 = 0;
+            // SECURITY: Pause check
+            self._require_not_paused();
+
+            // SECURITY: Limit batch size to prevent gas exhaustion attacks
             let len = checkpoint_ids.len();
+            assert!(len <= 100, "Batch size cannot exceed 100 checkpoints");
+
+            let mut i: u32 = 0;
             while i < len {
                 let checkpoint_id = *checkpoint_ids.at(i);
                 let checkpoint = self.checkpoints.read(checkpoint_id);
@@ -771,12 +814,38 @@ mod MeteredBilling {
             assert!(!tee.is_zero(), "TEE contract cannot be zero address");
             self.optimistic_tee.write(tee);
         }
+
+        // =========================================================================
+        // Pausable
+        // =========================================================================
+
+        fn pause(ref self: ContractState) {
+            self._only_owner();
+            assert!(!self.paused.read(), "Contract already paused");
+            self.paused.write(true);
+            self.emit(ContractPaused { account: get_caller_address() });
+        }
+
+        fn unpause(ref self: ContractState) {
+            self._only_owner();
+            assert!(self.paused.read(), "Contract not paused");
+            self.paused.write(false);
+            self.emit(ContractUnpaused { account: get_caller_address() });
+        }
+
+        fn is_paused(self: @ContractState) -> bool {
+            self.paused.read()
+        }
     }
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
         fn _only_owner(self: @ContractState) {
             assert(get_caller_address() == self.owner.read(), 'Only owner');
+        }
+
+        fn _require_not_paused(self: @ContractState) {
+            assert!(!self.paused.read(), "Contract is paused");
         }
 
         fn _tier_to_u8(self: @ContractState, tier: GPUTier) -> u8 {

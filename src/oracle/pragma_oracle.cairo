@@ -89,6 +89,10 @@ mod OracleWrapper {
     const USD_DECIMALS: u256 = 1000000000000000000;
     const BPS_DENOMINATOR: u256 = 10000;
 
+    // SECURITY: Minimum time before circuit breaker can be manually reset
+    // Prevents manipulation during legitimate price volatility
+    const MIN_CIRCUIT_BREAKER_RESET_DELAY: u64 = 3600; // 1 hour
+
     #[storage]
     struct Storage {
         owner: ContractAddress,
@@ -249,10 +253,23 @@ mod OracleWrapper {
         fn reset_circuit_breaker(ref self: ContractState) {
             assert(get_caller_address() == self.owner.read(), 'Only owner');
 
-            let mut cb_config = self.circuit_breaker.read();
-            cb_config.tripped = false;
-            cb_config.tripped_at = 0;
-            self.circuit_breaker.write(cb_config);
+            let cb_config = self.circuit_breaker.read();
+
+            // SECURITY: Require minimum time elapsed before manual reset
+            // Prevents manipulation during legitimate price volatility
+            if cb_config.tripped {
+                let now = get_block_timestamp();
+                let time_since_trip = now - cb_config.tripped_at;
+                assert!(
+                    time_since_trip >= MIN_CIRCUIT_BREAKER_RESET_DELAY,
+                    "Circuit breaker reset delay not met (1 hour)"
+                );
+            }
+
+            let mut new_cb_config = cb_config;
+            new_cb_config.tripped = false;
+            new_cb_config.tripped_at = 0;
+            self.circuit_breaker.write(new_cb_config);
 
             self.emit(CircuitBreakerReset {
                 reset_by: get_caller_address(),

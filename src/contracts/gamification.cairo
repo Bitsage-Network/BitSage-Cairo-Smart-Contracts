@@ -218,7 +218,11 @@ mod Gamification {
         fn register_worker(ref self: ContractState, worker_id: felt252, worker_address: ContractAddress) {
             // Only job manager can register
             assert!(get_caller_address() == self.job_manager.read(), "Unauthorized");
-            
+
+            // SECURITY: Input validation
+            assert!(worker_id != 0, "Worker ID cannot be zero");
+            assert!(!worker_address.is_zero(), "Worker address cannot be zero");
+
             let profile = WorkerProfile {
                 worker_id,
                 xp: 0,

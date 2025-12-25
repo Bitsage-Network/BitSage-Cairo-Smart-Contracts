@@ -203,6 +203,9 @@ mod ProverStaking {
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use core::num::traits::Zero;
 
+    // SECURITY: Slash lockup period - 7 days before slashed worker can re-stake
+    const SLASH_LOCKUP_PERIOD: u64 = 604800; // 7 days in seconds
+
     #[storage]
     struct Storage {
         /// Contract owner
@@ -229,6 +232,9 @@ mod ProverStaking {
         unstake_requests: Map<ContractAddress, (u256, u64)>,
         /// Whether contract is paused
         paused: bool,
+        /// SECURITY: Slash lockup - prevents immediate re-staking after slash
+        /// Maps worker address to timestamp when lockup ends
+        slash_lockup_until: Map<ContractAddress, u64>,
     }
 
     #[event]
@@ -372,6 +378,11 @@ mod ProverStaking {
             assert!(amount > 0, "Amount must be greater than 0");
 
             let caller = get_caller_address();
+
+            // SECURITY: Check slash lockup - prevent immediate re-stake after slashing
+            let slash_lockup_end = self.slash_lockup_until.read(caller);
+            let now = get_block_timestamp();
+            assert!(now >= slash_lockup_end, "Slash lockup period not expired");
             let config = self.config.read();
             
             // Check minimum stake
@@ -562,7 +573,11 @@ mod ProverStaking {
             // Transfer slashed amount to treasury
             let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             token.transfer(self.treasury.read(), slash_amount);
-            
+
+            // SECURITY: Set slash lockup period to prevent immediate re-staking
+            let now = get_block_timestamp();
+            self.slash_lockup_until.write(worker, now + SLASH_LOCKUP_PERIOD);
+
             self.emit(Slashed {
                 worker,
                 amount: slash_amount,

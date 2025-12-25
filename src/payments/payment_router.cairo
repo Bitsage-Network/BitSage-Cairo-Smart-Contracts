@@ -1273,6 +1273,14 @@ mod PaymentRouter {
             // SECURITY: Validate max payments has upper bound to prevent disabling rate limits
             assert!(max_payments <= 1000, "Max payments cannot exceed 1000 per window");
 
+            // SECURITY: Proportional limit - max 10 payments per minute to prevent spam
+            // This ensures reasonable rate limiting regardless of window size
+            let max_proportional: u32 = ((window_secs / 60) * 10).try_into().unwrap();
+            assert!(
+                max_payments <= max_proportional,
+                "Max payments too high for window (max 10/min)"
+            );
+
             self.rate_limit_window_secs.write(window_secs);
             self.max_payments_per_window.write(max_payments);
 
