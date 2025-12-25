@@ -13,8 +13,6 @@ pub mod interfaces {
     pub mod job_manager;
     pub mod proof_verifier;
     pub mod reputation_manager;
-    // TODO: Create these interface files when needed
-    // mod task_allocator;
 }
 
 pub mod utils {

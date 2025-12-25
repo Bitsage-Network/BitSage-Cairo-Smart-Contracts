@@ -170,6 +170,9 @@ pub trait IPaymentRouter<TContractState> {
     /// Admin: Set staker rewards pool address
     fn set_staker_rewards_pool(ref self: TContractState, pool: ContractAddress);
 
+    /// Set referral system contract for affiliate rewards
+    fn set_referral_system(ref self: TContractState, referral_system: ContractAddress);
+
     /// Register job with worker (called by JobManager)
     /// @param job_id: Job identifier
     /// @param worker: GPU provider address
@@ -351,6 +354,7 @@ mod PaymentRouter {
     // Obelysk Privacy Router for private worker payments
     use sage_contracts::obelysk::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use sage_contracts::obelysk::elgamal::{encrypt, is_zero};
+    use sage_contracts::growth::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
 
     // Base SAGE price: $0.10 = 100000000000000000 (0.1 * 10^18)
     const BASE_SAGE_PRICE_USD: u256 = 100000000000000000;
@@ -436,6 +440,9 @@ mod PaymentRouter {
         dynamic_fee_tiers: DynamicFeeTiers,
         monthly_volume_usd: u256,           // Current month's volume
         month_start_timestamp: u64,         // When current month started
+
+        // Referral system for affiliate rewards
+        referral_system: ContractAddress,
     }
 
     #[event]
@@ -1080,8 +1087,8 @@ mod PaymentRouter {
             assert(!self.privacy_nullifiers.read(nullifier), 'Nullifier used');
 
             // Verify ZK proof structure
-            // TODO: In production, integrate with ProofVerifier contract for full ZK verification
-            // Current check ensures proof array is not empty and has minimum expected elements
+            // PRODUCTION: Integrate with ProofVerifier contract for full STWO ZK verification
+            // Current implementation: basic structure validation for testnet
             assert!(proof.len() >= 4, "Proof must have at least 4 elements");
 
             // Mark nullifier as used
@@ -1205,6 +1212,11 @@ mod PaymentRouter {
                 old_pool,
                 new_pool: pool,
             });
+        }
+
+        fn set_referral_system(ref self: ContractState, referral_system: ContractAddress) {
+            self._only_owner();
+            self.referral_system.write(referral_system);
         }
 
         fn register_job(
@@ -2090,6 +2102,28 @@ mod PaymentRouter {
                 to_stakers: staker_amount,
                 timestamp: get_block_timestamp(),
             });
+
+            // Record trade with referral system for the payer
+            // This rewards referrers when their referred users make payments
+            self._record_referral_payment(get_caller_address(), usd_value, protocol_fee, config.sage_address);
+        }
+
+        /// Record payment with referral system if configured
+        fn _record_referral_payment(
+            ref self: ContractState,
+            payer: ContractAddress,
+            volume_usd: u256,
+            fee_amount: u256,
+            fee_token: ContractAddress
+        ) {
+            let referral_addr = self.referral_system.read();
+            if referral_addr.is_zero() {
+                return;  // Referral system not configured
+            }
+
+            // Call referral system to record payment and distribute rewards
+            let referral = IReferralSystemDispatcher { contract_address: referral_addr };
+            referral.record_trade(payer, volume_usd, fee_amount, fee_token);
         }
 
         fn _token_to_felt(self: @ContractState, token: PaymentToken) -> felt252 {

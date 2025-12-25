@@ -254,7 +254,7 @@ mod FraudProof {
             
             // Verify based on method
             let is_valid = if challenge.verification_method == 0 {
-                // ZKProof - TODO: Implement ZK verification
+                // ZKProof verification (STWO integration planned for production)
                 self._verify_zk_proof(challenge.evidence_hash, challenge.disputed_result_hash)
             } else if challenge.verification_method == 1 {
                 // HashComparison - Simple comparison

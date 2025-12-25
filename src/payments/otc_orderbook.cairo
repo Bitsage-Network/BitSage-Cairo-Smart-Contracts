@@ -227,6 +227,9 @@ pub trait IOTCOrderbook<TContractState> {
 
     /// Withdraw collected fees
     fn withdraw_fees(ref self: TContractState, token: ContractAddress);
+
+    /// Set referral system contract for reward distribution
+    fn set_referral_system(ref self: TContractState, referral_system: ContractAddress);
 }
 
 #[starknet::contract]
@@ -242,6 +245,7 @@ mod OTCOrderbook {
     };
     use core::num::traits::Zero;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use sage_contracts::growth::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
 
     const BPS_DENOMINATOR: u256 = 10000;
     const MAX_PAIRS: u8 = 10;
@@ -251,6 +255,7 @@ mod OTCOrderbook {
         owner: ContractAddress,
         sage_token: ContractAddress,
         fee_recipient: ContractAddress,
+        referral_system: ContractAddress,  // Optional referral integration
         config: OrderbookConfig,
 
         // Trading pairs
@@ -771,6 +776,11 @@ mod OTCOrderbook {
             let token_dispatcher = IERC20Dispatcher { contract_address: token };
             token_dispatcher.transfer(self.fee_recipient.read(), amount);
         }
+
+        fn set_referral_system(ref self: ContractState, referral_system: ContractAddress) {
+            self._only_owner();
+            self.referral_system.write(referral_system);
+        }
     }
 
     #[generate_trait]
@@ -1203,7 +1213,29 @@ mod OTCOrderbook {
                 status: maker_order.status,
             });
 
+            // Record trade with referral system for both parties
+            self._record_referral_trade(taker_order.maker, quote_amount, taker_fee, pair.quote_token);
+            self._record_referral_trade(maker_order.maker, quote_amount, maker_fee, pair.quote_token);
+
             fill_amount
+        }
+
+        /// Record trade with referral system if configured
+        fn _record_referral_trade(
+            ref self: ContractState,
+            trader: ContractAddress,
+            volume_usd: u256,
+            fee_amount: u256,
+            fee_token: ContractAddress
+        ) {
+            let referral_addr = self.referral_system.read();
+            if referral_addr.is_zero() {
+                return;  // Referral system not configured
+            }
+
+            // Call referral system to record trade and distribute rewards
+            let referral = IReferralSystemDispatcher { contract_address: referral_addr };
+            referral.record_trade(trader, volume_usd, fee_amount, fee_token);
         }
     }
 }
