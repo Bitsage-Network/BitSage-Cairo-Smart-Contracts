@@ -3,6 +3,7 @@ mod OptimisticTEE {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
     use core::array::Array;
     use core::num::traits::Zero;
+    use core::poseidon::poseidon_hash_span;
     use sage_contracts::interfaces::proof_verifier::{
         IProofVerifierDispatcher, IProofVerifierDispatcherTrait, ProofJobId, ProofStatus
     };
@@ -16,6 +17,11 @@ mod OptimisticTEE {
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
+    };
+    // Production TEE attestation verification
+    use sage_contracts::obelysk::tee_attestation::{
+        verify_attestation, verify_report_data_matches,
+        TEE_TYPE_INTEL_TDX, TEE_TYPE_AMD_SEV_SNP, TEE_TYPE_NVIDIA_CC,
     };
 
     // TEE Result Status Constants
@@ -88,6 +94,16 @@ mod OptimisticTEE {
         total_workers_slashed: u64,
         total_slash_amount: u256,
         total_challenger_rewards: u256,
+
+        // === TEE ATTESTATION VERIFICATION ===
+        // Nonce tracking for replay protection
+        job_nonces: Map<u256, felt252>,           // job_id -> expected nonce
+        used_nonces: Map<felt252, bool>,          // nonce -> already used
+        nonce_counter: u64,                        // Global nonce counter
+        // Verified attestation results
+        verified_attestations: Map<u256, felt252>, // job_id -> attestation hash
+        // TEE type per job
+        job_tee_types: Map<u256, u8>,             // job_id -> TEE type used
     }
 
     #[event]
@@ -224,16 +240,28 @@ mod OptimisticTEE {
 
     #[abi(embed_v0)]
     impl OptimisticTEEImpl of super::IOptimisticTEE<ContractState> {
+        /// Submit a TEE-attested result with full cryptographic verification
+        ///
+        /// # Arguments
+        /// * `job_id` - The job identifier
+        /// * `worker_id` - Worker identifier (must match report_data in quote)
+        /// * `result_hash` - Hash of computation result (must match report_data in quote)
+        /// * `enclave_measurement` - Expected enclave/TD measurement
+        /// * `tee_type` - Type of TEE (1=TDX, 2=SEV-SNP, 3=NVIDIA)
+        /// * `attestation_quote` - Full attestation quote from TEE hardware
         fn submit_result(
             ref self: ContractState,
             job_id: u256,
             worker_id: felt252,
             result_hash: felt252,
             enclave_measurement: felt252,
-            signature: Array<felt252> // TEE signature
+            tee_type: u8,
+            attestation_quote: Array<felt252>
         ) {
-            // 0. Check worker staking requirement
             let worker_address = get_caller_address();
+            let current_timestamp = get_block_timestamp();
+
+            // === SECURITY CHECK 1: Worker Staking Requirement ===
             if self.require_staking.read() {
                 let staking_addr = self.prover_staking.read();
                 if !staking_addr.is_zero() {
@@ -242,47 +270,134 @@ mod OptimisticTEE {
                 }
             }
 
-            // 1. Verify Enclave is Whitelisted
+            // === SECURITY CHECK 2: Validate TEE Type ===
+            assert!(
+                tee_type == TEE_TYPE_INTEL_TDX
+                || tee_type == TEE_TYPE_AMD_SEV_SNP
+                || tee_type == TEE_TYPE_NVIDIA_CC,
+                "Invalid TEE type"
+            );
+
+            // === SECURITY CHECK 3: Enclave Whitelist ===
             let verifier = IProofVerifierDispatcher { contract_address: self.proof_verifier.read() };
-            assert!(verifier.is_enclave_whitelisted(enclave_measurement), "Invalid Enclave");
+            assert!(verifier.is_enclave_whitelisted(enclave_measurement), "Enclave not whitelisted");
 
-            // 2. Verify Signature (Mock for now, would use signature verification syscall)
-            assert!(signature.len() > 0, "Missing signature");
+            // === SECURITY CHECK 4: Get Expected Nonce (Replay Protection) ===
+            let expected_nonce = self.job_nonces.read(job_id);
+            assert!(expected_nonce != 0, "No nonce registered for job - call request_attestation first");
+            assert!(!self.used_nonces.read(expected_nonce), "Nonce already used - replay attack");
 
-            // 3. Store worker address mapping
+            // === SECURITY CHECK 5: Cryptographic Attestation Verification ===
+            let verification_result = verify_attestation(
+                tee_type,
+                attestation_quote.span(),
+                enclave_measurement,
+                expected_nonce,
+                current_timestamp,
+            );
+
+            assert!(verification_result.is_valid, "TEE attestation verification failed");
+            assert!(verification_result.tee_type == tee_type, "TEE type mismatch in quote");
+
+            // === SECURITY CHECK 6: Verify Report Data Matches Claimed Result ===
+            // The TEE hardware embeds result_hash and worker_id in report_data
+            // This proves the TEE actually computed and signed this specific result
+            let report_data_valid = verify_report_data_matches(
+                verification_result.report_data,  // From verified quote
+                0,  // report_data_low not used in simplified extraction
+                result_hash,
+                worker_id,
+            );
+            assert!(report_data_valid, "Report data mismatch - result not from this TEE");
+
+            // === SECURITY CHECK 7: Mark Nonce as Used ===
+            self.used_nonces.write(expected_nonce, true);
+
+            // === Store Verified Result ===
             self.worker_addresses.write(worker_id, worker_address);
+            self.job_tee_types.write(job_id, tee_type);
 
-            // 4. Store Result
+            // Store attestation hash for audit trail
+            let attestation_hash = poseidon_hash_span(attestation_quote.span());
+            self.verified_attestations.write(job_id, attestation_hash);
+
             let result = TEEResult {
                 worker_id,
                 worker_address,
                 result_hash,
-                timestamp: get_block_timestamp(),
+                timestamp: current_timestamp,
                 status: STATUS_PENDING
             };
             self.tee_results.write(job_id, result);
 
-            // 5. Add to pending jobs queue for keeper finalization
+            // Add to pending jobs queue for keeper finalization
             self._add_to_pending_queue(job_id);
 
             self.emit(ResultSubmitted { job_id, worker_id, result_hash });
         }
 
         /// Submit result with payment amount (for keeper reward calculation)
+        /// This version includes the job payment amount for keeper reward calculations
         fn submit_result_with_payment(
             ref self: ContractState,
             job_id: u256,
             worker_id: felt252,
             result_hash: felt252,
             enclave_measurement: felt252,
-            signature: Array<felt252>,
+            tee_type: u8,
+            attestation_quote: Array<felt252>,
             payment_amount: u256  // Job payment amount for keeper reward calc
         ) {
             // Store payment amount for keeper rewards
             self.job_payment_amounts.write(job_id, payment_amount);
 
-            // Call standard submit
-            self.submit_result(job_id, worker_id, result_hash, enclave_measurement, signature);
+            // Call standard submit with full TEE verification
+            self.submit_result(job_id, worker_id, result_hash, enclave_measurement, tee_type, attestation_quote);
+        }
+
+        /// Request attestation for a job - generates and registers a nonce
+        /// Must be called before worker submits result to get the expected nonce
+        /// Returns the nonce that must be embedded in the TEE attestation quote
+        fn request_attestation(ref self: ContractState, job_id: u256) -> felt252 {
+            // Increment global nonce counter
+            let counter = self.nonce_counter.read();
+            self.nonce_counter.write(counter + 1);
+
+            // Generate unique nonce using poseidon hash
+            let nonce = poseidon_hash_span(
+                array![
+                    job_id.low.into(),
+                    job_id.high.into(),
+                    counter.into(),
+                    get_block_timestamp().into(),
+                    get_caller_address().into()
+                ].span()
+            );
+
+            // Register nonce for this job
+            self.job_nonces.write(job_id, nonce);
+
+            nonce
+        }
+
+        /// Get the expected nonce for a job (view function)
+        fn get_job_nonce(self: @ContractState, job_id: u256) -> felt252 {
+            self.job_nonces.read(job_id)
+        }
+
+        /// Check if a nonce has been used
+        fn is_nonce_used(self: @ContractState, nonce: felt252) -> bool {
+            self.used_nonces.read(nonce)
+        }
+
+        /// Get the TEE type used for a job
+        fn get_job_tee_type(self: @ContractState, job_id: u256) -> u8 {
+            self.job_tee_types.read(job_id)
+        }
+
+        /// Get verified attestation hash for audit
+        fn get_attestation_hash(self: @ContractState, job_id: u256) -> felt252 {
+            self.verified_attestations.read(job_id)
         }
 
         fn challenge_result(
@@ -909,34 +1024,51 @@ use starknet::ContractAddress;
 
 #[starknet::interface]
 pub trait IOptimisticTEE<TContractState> {
-    // Core functions
+    // =========================================================================
+    // CORE FUNCTIONS - TEE Result Submission with Cryptographic Verification
+    // =========================================================================
+
+    /// Submit a TEE-attested result with full cryptographic verification
+    /// Verifies: staking, enclave whitelist, nonce, attestation quote, report data
     fn submit_result(
         ref self: TContractState,
         job_id: u256,
         worker_id: felt252,
         result_hash: felt252,
         enclave_measurement: felt252,
-        signature: Array<felt252>
+        tee_type: u8,                    // 1=TDX, 2=SEV-SNP, 3=NVIDIA
+        attestation_quote: Array<felt252>  // Full TEE attestation quote
     );
+
+    /// Submit result with payment amount for keeper reward calculation
     fn submit_result_with_payment(
         ref self: TContractState,
         job_id: u256,
         worker_id: felt252,
         result_hash: felt252,
         enclave_measurement: felt252,
-        signature: Array<felt252>,
+        tee_type: u8,
+        attestation_quote: Array<felt252>,
         payment_amount: u256
     );
+
+    /// Request attestation nonce for a job (must be called before submit)
+    fn request_attestation(ref self: TContractState, job_id: u256) -> felt252;
+
     fn challenge_result(ref self: TContractState, job_id: u256, evidence_hash: felt252);
     fn resolve_challenge(ref self: TContractState, job_id: u256, zk_proof_id: u256);
     fn finalize_result(ref self: TContractState, job_id: u256);
 
-    // Keeper functions - batch finalization with rewards
+    // =========================================================================
+    // KEEPER FUNCTIONS - Batch finalization with rewards
+    // =========================================================================
     fn batch_finalize(ref self: TContractState, job_ids: Array<u256>) -> u256;
     fn finalize_ready_jobs(ref self: TContractState, max_count: u32) -> u256;
     fn fund_keeper_pool(ref self: TContractState, amount: u256);
 
-    // Admin functions
+    // =========================================================================
+    // ADMIN FUNCTIONS
+    // =========================================================================
     fn set_proof_gated_payment(ref self: TContractState, payment: ContractAddress);
     fn set_challenge_period(ref self: TContractState, period: u64);
     fn set_challenge_stake(ref self: TContractState, stake: u256);
@@ -948,7 +1080,9 @@ pub trait IOptimisticTEE<TContractState> {
     fn set_prover_staking(ref self: TContractState, staking: ContractAddress);
     fn set_require_staking(ref self: TContractState, required: bool);
 
-    // View functions
+    // =========================================================================
+    // VIEW FUNCTIONS
+    // =========================================================================
     fn get_result_status(self: @TContractState, job_id: u256) -> u8;
     fn get_challenge_period(self: @TContractState) -> u64;
     fn is_finalized(self: @TContractState, job_id: u256) -> bool;
@@ -969,5 +1103,21 @@ pub trait IOptimisticTEE<TContractState> {
     fn get_prover_staking(self: @TContractState) -> ContractAddress;
     fn is_worker_eligible(self: @TContractState, worker: ContractAddress) -> bool;
     fn get_challenger_stake(self: @TContractState, job_id: u256) -> (u256, bool);
+
+    // =========================================================================
+    // TEE ATTESTATION VIEW FUNCTIONS
+    // =========================================================================
+
+    /// Get the expected nonce for a job
+    fn get_job_nonce(self: @TContractState, job_id: u256) -> felt252;
+
+    /// Check if a nonce has been used (replay protection)
+    fn is_nonce_used(self: @TContractState, nonce: felt252) -> bool;
+
+    /// Get the TEE type used for a job (1=TDX, 2=SEV-SNP, 3=NVIDIA)
+    fn get_job_tee_type(self: @TContractState, job_id: u256) -> u8;
+
+    /// Get verified attestation hash for audit trail
+    fn get_attestation_hash(self: @TContractState, job_id: u256) -> felt252;
 }
 
