@@ -39,17 +39,24 @@ use sage_contracts::interfaces::job_manager::{JobId, ModelRequirements, WorkerId
 // Token interface for SAGE token operations
 use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 
+// Shared constants
+use sage_contracts::utils::constants::{
+    SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE, BPS_DENOMINATOR
+};
+
 #[starknet::contract]
 mod CDCPool {
     use super::{
         ICDCPool, WorkerCapabilities, WorkerProfile, WorkerStatus, PerformanceMetrics,
         StakeInfo, UnstakeRequest, AllocationResult, SlashRecord, SlashReason, WorkerTier,
         WorkerTierBenefits, HolderTier, ContractAddress, get_caller_address, get_block_timestamp,
-        StoragePointerReadAccess, StoragePointerWriteAccess, 
+        StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map,
         JobId, ModelRequirements, WorkerId, IERC20Dispatcher, IERC20DispatcherTrait,
         WorkerRegistered, WorkerDeactivated, WorkerReactivated, StakeAdded, UnstakeRequested,
-        UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased
+        UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased,
+        // Shared constants
+        SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE, BPS_DENOMINATOR
     };
 
     // Helper constants
@@ -170,7 +177,7 @@ mod CDCPool {
         self.next_worker_id.write(1);
         self.next_unstake_id.write(1);
         self.next_slash_id.write(1);
-        self.base_reward_rate.write(1000000000000000000); // 1 SAGE base rate
+        self.base_reward_rate.write(SCALE); // 1 SAGE base rate
         self.performance_multiplier.write(50); // 50% bonus
         self.ciro_price_usd_cents.write(100); // $1.00 initial price
         
@@ -209,7 +216,7 @@ mod CDCPool {
             
             // Check if worker already exists
             let existing_worker = self.owner_to_worker.read(caller);
-            assert!(existing_worker == 0, "Worker already registered");
+            assert!(existing_worker == 0, "CDC: worker already registered");
             
             // Generate new worker ID
             let worker_id_felt = self.next_worker_id.read();
@@ -265,7 +272,7 @@ mod CDCPool {
             let worker_key = worker_id.value;
             // Cairo 2.12.0: More descriptive error messages
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "Not worker owner");
+            assert!(owner == caller, "CDC: not worker owner");
             
             self.worker_capabilities.write(worker_key, new_capabilities);
             
@@ -280,7 +287,7 @@ mod CDCPool {
             let worker_key = worker_id.value;
             // Cairo 2.12.0: Enhanced validation with better error context
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "Not worker owner");
+            assert!(owner == caller, "CDC: not worker owner");
             
             let current_status = self.worker_status.read(worker_key);
             if current_status == WorkerStatus::Active {
@@ -299,7 +306,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "Not worker owner");
+            assert!(owner == caller, "CDC: not worker owner");
             
             let current_status = self.worker_status.read(worker_key);
             assert!(current_status == WorkerStatus::Inactive, "Worker not inactive");
@@ -320,7 +327,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "Not worker owner");
+            assert!(owner == caller, "CDC: not worker owner");
             
             self.last_heartbeat.write(worker_key, get_block_timestamp());
             self.worker_performance.write(worker_key, performance_data);
@@ -331,7 +338,7 @@ mod CDCPool {
         fn stake(ref self: ContractState, amount: u256, lock_period: u64) {
             self._reentrancy_guard_start();
             assert!(!self.paused.read(), "Contract is paused");
-            assert!(amount >= self.min_stake.read(), "Amount below minimum stake");
+            assert!(amount >= self.min_stake.read(), "CDC: stake below minimum");
             
             let caller = get_caller_address();
             let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
@@ -361,9 +368,9 @@ mod CDCPool {
             let caller = get_caller_address();
             let stake_info = self.stakes.read(caller);
             // Cairo 2.12.0: Better stake validation with clear error messages
-            assert!(stake_info.amount >= amount, "Insufficient stake");
+            assert!(stake_info.amount >= amount, "CDC: insufficient stake");
             
-            let unlock_time = get_block_timestamp() + 604800; // 7 days
+            let unlock_time = get_block_timestamp() + SECONDS_PER_WEEK;
             let unstake_id = self.next_unstake_id.read();
             
             let request = UnstakeRequest {
@@ -431,7 +438,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let mut stake_info = self.stakes.read(caller);
             // Cairo 2.12.0: Improved delegation validation
-            assert!(stake_info.amount >= amount, "Insufficient stake");
+            assert!(stake_info.amount >= amount, "CDC: insufficient stake");
             
             stake_info.delegated_amount += amount;
             self.stakes.write(caller, stake_info);
@@ -454,7 +461,7 @@ mod CDCPool {
             // Input validation
             assert!(priority <= 10, "Priority must be 0-10");
             assert!(max_latency > 0, "Max latency must be positive");
-            assert!(max_latency <= 604800, "Max latency exceeds 7 days");
+            assert!(max_latency <= SECONDS_PER_WEEK, "Max latency exceeds 7 days");
             assert!(requirements.min_memory_gb > 0, "Memory requirement must be positive");
 
             // Simplified allocation algorithm - find first available worker
@@ -630,7 +637,7 @@ mod CDCPool {
             evidence: Array<felt252>
         ) -> u256 {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin can slash");
+            assert!(caller == self.admin.read(), "CDC: admin only for slash");
             
             let worker_key = worker_id.value;
             let worker_owner = self.worker_owners.read(worker_key);
@@ -671,7 +678,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "Not worker owner");
+            assert!(owner == caller, "CDC: not worker owner");
 
             // Find the most recent slash for this worker
             let slash_id = self.next_slash_id.read() - 1;
@@ -682,9 +689,8 @@ mod CDCPool {
             assert!(!self.slash_challenged.read(slash_id), "Already challenged");
 
             // Check challenge deadline (7 days from slash)
-            let challenge_window: u64 = 604800; // 7 days
             assert!(
-                get_block_timestamp() < slash_record.timestamp + challenge_window,
+                get_block_timestamp() < slash_record.timestamp + CHALLENGE_PERIOD,
                 "Challenge window expired"
             );
 
@@ -697,7 +703,7 @@ mod CDCPool {
 
             // Record challenge
             let evidence_hash = if evidence.len() > 0 { *evidence.at(0) } else { 0 };
-            let deadline = get_block_timestamp() + 604800; // 7 days to resolve
+            let deadline = get_block_timestamp() + CHALLENGE_PERIOD;
 
             self.slash_challenged.write(slash_id, true);
             self.challenge_evidence.write(slash_id, evidence_hash);
@@ -722,14 +728,14 @@ mod CDCPool {
             self._reentrancy_guard_start();
 
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin can resolve");
+            assert!(caller == self.admin.read(), "CDC: admin only for resolve");
 
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
 
             // Find the challenged slash
             let slash_id = self.next_slash_id.read() - 1;
-            assert!(self.slash_challenged.read(slash_id), "Slash not challenged");
+            assert!(self.slash_challenged.read(slash_id), "CDC: slash not challenged");
 
             let slash_record = self.slash_records.read(slash_id);
             let deposit = self.challenge_deposit.read();
@@ -805,7 +811,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "Not worker owner");
+            assert!(owner == caller, "CDC: not worker owner");
 
             let pending = self.pending_rewards.read(worker_key);
             if pending > 0 {
@@ -934,7 +940,7 @@ mod CDCPool {
 
         fn get_worker_tier(self: @ContractState, worker: ContractAddress) -> WorkerTier {
             let stake_info = self.stakes.read(worker);
-            let usd_value = (stake_info.amount * self.ciro_price_usd_cents.read()) / 1000000000000000000; // Convert from wei
+            let usd_value = (stake_info.amount * self.ciro_price_usd_cents.read()) / SCALE;
             
             if usd_value >= self.tier_usd_requirements.read(7) {
                 WorkerTier::Institutional
@@ -978,7 +984,7 @@ mod CDCPool {
 
         fn get_stake_usd_value(self: @ContractState, worker: ContractAddress) -> u256 {
             let stake_info = self.stakes.read(worker);
-            (stake_info.amount * self.ciro_price_usd_cents.read()) / 1000000000000000000 // Convert from wei
+            (stake_info.amount * self.ciro_price_usd_cents.read()) / SCALE
         }
 
         fn get_tier_ciro_requirement(self: @ContractState, tier: WorkerTier) -> u256 {
@@ -997,12 +1003,12 @@ mod CDCPool {
             let ciro_price = self.ciro_price_usd_cents.read();
             
             // Calculate SAGE tokens needed (in wei)
-            (usd_requirement * 1000000000000000000) / ciro_price
+            (usd_requirement * SCALE) / ciro_price
         }
 
         fn update_ciro_price(ref self: ContractState, new_price: u256) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin can update price");
+            assert!(caller == self.admin.read(), "CDC: admin only for price");
             self.ciro_price_usd_cents.write(new_price);
         }
 
@@ -1036,7 +1042,7 @@ mod CDCPool {
         fn get_holder_tier(self: @ContractState, holder: ContractAddress) -> HolderTier {
             let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let balance = sage_token.balance_of(holder);
-            let usd_value = (balance * self.ciro_price_usd_cents.read()) / 1000000000000000000;
+            let usd_value = (balance * self.ciro_price_usd_cents.read()) / SCALE;
             
             if balance >= 100000000000000000000000000 && usd_value >= 5000000 { // 100M SAGE + $50M
                 HolderTier::HyperWhale
@@ -1075,7 +1081,7 @@ mod CDCPool {
 
         fn update_min_stake(ref self: ContractState, new_min_stake: u256) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin");
+            assert!(caller == self.admin.read(), "CDC: admin only");
             self.min_stake.write(new_min_stake);
         }
 
@@ -1085,7 +1091,7 @@ mod CDCPool {
             percentage: u8
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin");
+            assert!(caller == self.admin.read(), "CDC: admin only");
             let reason_u8: u8 = reason.into();
             self.slash_percentages.write(reason_u8, percentage);
         }
@@ -1096,20 +1102,20 @@ mod CDCPool {
             performance_multiplier: u8
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin");
+            assert!(caller == self.admin.read(), "CDC: admin only");
             self.base_reward_rate.write(base_rate);
             self.performance_multiplier.write(performance_multiplier);
         }
 
         fn pause_contract(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin");
+            assert!(caller == self.admin.read(), "CDC: admin only");
             self.paused.write(true);
         }
 
         fn resume_contract(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin");
+            assert!(caller == self.admin.read(), "CDC: admin only");
             self.paused.write(false);
         }
 
@@ -1119,7 +1125,7 @@ mod CDCPool {
             reason: felt252
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Only admin");
+            assert!(caller == self.admin.read(), "CDC: admin only");
 
             let worker_key = worker_id.value;
             self.worker_status.write(worker_key, WorkerStatus::Banned);
@@ -1150,7 +1156,7 @@ mod CDCPool {
 
         /// Check if caller is admin
         fn _only_admin(self: @ContractState) {
-            assert!(get_caller_address() == self.admin.read(), "Only admin");
+            assert!(get_caller_address() == self.admin.read(), "CDC: admin only");
         }
 
         /// Check if contract is not paused

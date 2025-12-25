@@ -47,6 +47,11 @@ use sage_contracts::payments::proof_gated_payment::{
     IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait
 };
 
+// Shared constants
+use sage_contracts::utils::constants::{
+    SECONDS_PER_HOUR, SECONDS_PER_DAY, SCALE, BPS_DENOMINATOR
+};
+
 #[starknet::contract]
 mod JobManager {
     use super::{
@@ -59,7 +64,9 @@ mod JobManager {
         // PHASE 2: CDC Pool notification hooks
         ICDCPoolDispatcher, ICDCPoolDispatcherTrait,
         // PHASE 3: Proof-Gated Payment integration
-        IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait
+        IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait,
+        // Shared constants
+        SECONDS_PER_HOUR, SECONDS_PER_DAY, SCALE, BPS_DENOMINATOR
     };
 
     #[event]
@@ -316,9 +323,9 @@ mod JobManager {
 
         // Set default configuration
         self.platform_fee_bps.write(250); // 2.5%
-        self.min_job_payment.write(1000000000000000000); // 1 SAGE token
-        self.max_job_duration.write(86400); // 24 hours
-        self.dispute_fee.write(10000000000000000000); // 10 SAGE tokens
+        self.min_job_payment.write(SCALE); // 1 SAGE token
+        self.max_job_duration.write(SECONDS_PER_DAY); // 24 hours
+        self.dispute_fee.write(10 * SCALE); // 10 SAGE tokens
         self.min_allocation_score.write(100);
 
         self.next_job_id.write(1);
@@ -344,11 +351,11 @@ mod JobManager {
             assert!(!client.is_zero(), "Invalid client address");
 
             // Validate payment
-            assert!(payment >= self.min_job_payment.read(), "Payment too low");
+            assert!(payment >= self.min_job_payment.read(), "JM: payment too low");
 
             // Validate deadline (must be in future but not too far - max 30 days)
-            let max_deadline_offset: u64 = 30 * 86400; // 30 days in seconds
-            assert!(job_spec.sla_deadline > current_time, "Deadline must be in future");
+            let max_deadline_offset: u64 = 30 * SECONDS_PER_DAY; // 30 days
+            assert!(job_spec.sla_deadline > current_time, "JM: deadline in past");
             assert!(
                 job_spec.sla_deadline <= current_time + max_deadline_offset,
                 "Deadline too far in future"
@@ -428,7 +435,7 @@ mod JobManager {
                 expected_output_format: 'proof_format',
                 verification_method: VerificationMethod::ZeroKnowledgeProof,
                 max_reward: payment,
-                sla_deadline: get_block_timestamp() + 3600, // 1 hour deadline
+                sla_deadline: get_block_timestamp() + SECONDS_PER_HOUR, // 1 hour deadline
                 compute_requirements: array![], // Empty array for now
                 metadata: array![] // Empty array for now
             };
@@ -445,7 +452,7 @@ mod JobManager {
             self._check_not_paused();
 
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(caller == self.admin.read(), "JM: admin only");
 
             // Cairo 2.12.0: Combined let-else for type conversion and state validation
             let Some(job_key) = job_id.value.try_into() else {
@@ -610,7 +617,7 @@ mod JobManager {
                 assert!(self.platform_fee_bps.read() <= 10000, "Invalid platform fee");
 
                 // Calculate platform fee
-                let platform_fee = (payment_amount * self.platform_fee_bps.read().into()) / 10000;
+                let platform_fee = (payment_amount * self.platform_fee_bps.read().into()) / BPS_DENOMINATOR;
                 let worker_payment = payment_amount - platform_fee;
 
                 // SECURITY FIX: Update state BEFORE external calls (reentrancy protection)
@@ -716,7 +723,7 @@ mod JobManager {
                 WorkerStats {
                     total_jobs_completed: 0,
                     success_rate: 100, // Default 100% for new workers
-                    average_completion_time: 3600, // Default 1 hour
+                    average_completion_time: SECONDS_PER_HOUR, // Default 1 hour
                     reputation_score: 1000, // Default reputation
                     total_earnings: 0
                 }
@@ -727,7 +734,7 @@ mod JobManager {
 
         fn update_config(ref self: ContractState, config_key: felt252, config_value: felt252) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(caller == self.admin.read(), "JM: admin only");
 
             // Phase 2.1: Track old value for event emission
             let old_value: felt252 = if config_key == 'platform_fee_bps' {
@@ -777,8 +784,8 @@ mod JobManager {
 
         fn pause(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
-            assert!(!self.contract_paused.read(), "Already paused");
+            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(!self.contract_paused.read(), "JM: already paused");
 
             self.contract_paused.write(true);
 
@@ -791,8 +798,8 @@ mod JobManager {
 
         fn unpause(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
-            assert!(self.contract_paused.read(), "Not paused");
+            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(self.contract_paused.read(), "JM: not paused");
 
             self.contract_paused.write(false);
 
@@ -805,7 +812,7 @@ mod JobManager {
 
         fn emergency_withdraw(ref self: ContractState, token: ContractAddress, amount: u256) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(caller == self.admin.read(), "JM: admin only");
 
             // Phase 2.1: Validate inputs
             assert!(!token.is_zero(), "Invalid token address");
@@ -968,7 +975,7 @@ mod JobManager {
             base_gas_cost: u256
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(caller == self.admin.read(), "JM: admin only");
             
             let Some(model_key) = model_id.value.try_into() else {
                 panic!("Invalid model ID conversion");
@@ -1041,7 +1048,7 @@ mod JobManager {
         /// Admin: Set ProofGatedPayment contract address
         fn set_proof_gated_payment(ref self: ContractState, payment: ContractAddress) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(caller == self.admin.read(), "JM: admin only");
             self.proof_gated_payment.write(payment);
         }
 
@@ -1087,10 +1094,10 @@ mod JobManager {
 
             let client = self.job_clients.read(job_key);
             let caller = get_caller_address();
-            assert!(caller == client, "Only job client can cancel");
+            assert!(caller == client, "JM: not job client");
 
             let state = self.job_states.read(job_key);
-            assert!(state == JobState::Queued, "Can only cancel queued jobs");
+            assert!(state == JobState::Queued, "JM: can only cancel queued");
 
             let payment = self.job_payments.read(job_key);
 
@@ -1207,7 +1214,7 @@ mod JobManager {
         // get_job_state, get_worker_stats, register_worker) - now using only external impl versions
 
         fn _check_not_paused(self: @ContractState) {
-            assert!(!self.contract_paused.read(), "Contract is paused");
+            assert!(!self.contract_paused.read(), "JM: contract paused");
         }
 
         // ============================================================================
@@ -1216,7 +1223,7 @@ mod JobManager {
 
         /// Start non-reentrant section - call before external contract calls
         fn _start_nonreentrant(ref self: ContractState) {
-            assert!(!self._reentrancy_guard.read(), "Reentrant call detected");
+            assert!(!self._reentrancy_guard.read(), "JM: reentrancy");
             self._reentrancy_guard.write(true);
         }
 

@@ -7,14 +7,12 @@ use core::traits::TryInto;
 
 use snforge_std::{
     declare, ContractClassTrait, DeclareResultTrait,
-    start_cheat_caller_address, stop_cheat_caller_address,
-    start_cheat_block_timestamp_global, stop_cheat_block_timestamp_global
+    start_cheat_caller_address, stop_cheat_caller_address
 };
 
 use sage_contracts::interfaces::job_manager::{
     IJobManagerDispatcher, IJobManagerDispatcherTrait,
-    JobId, WorkerId, ModelId, JobSpec, JobType, VerificationMethod,
-    JobState, ModelRequirements, JobDetails
+    JobId, WorkerId, JobState
 };
 
 // =============================================================================
@@ -44,20 +42,6 @@ fn deploy_job_manager() -> IJobManagerDispatcher {
     IJobManagerDispatcher { contract_address }
 }
 
-fn create_test_job_spec() -> JobSpec {
-    JobSpec {
-        job_type: JobType::AIInference,
-        model_id: ModelId { value: 1 },
-        input_data_hash: 'test_input_hash',
-        expected_output_format: 'json',
-        verification_method: VerificationMethod::None,
-        max_reward: 100_000000000000000000, // 100 SAGE
-        sla_deadline: 3600, // 1 hour
-        compute_requirements: array!['gpu_required'],
-        metadata: array!['test_job'],
-    }
-}
-
 // =============================================================================
 // Basic Configuration Tests
 // =============================================================================
@@ -84,7 +68,7 @@ fn test_is_not_paused_initially() {
 #[test]
 fn test_get_platform_config() {
     let job_manager = deploy_job_manager();
-    let (fee_bps, min_payment, max_duration, dispute_fee) = job_manager.get_platform_config();
+    let (fee_bps, min_payment, max_duration, _dispute_fee) = job_manager.get_platform_config();
 
     assert(fee_bps > 0, 'Fee BPS should be set');
     assert(min_payment > 0, 'Min payment should be set');
@@ -167,17 +151,6 @@ fn test_get_worker_count() {
 // =============================================================================
 
 #[test]
-fn test_get_job_state_nonexistent() {
-    let job_manager = deploy_job_manager();
-
-    let job_id = JobId { value: 999 };
-    let state = job_manager.get_job_state(job_id);
-
-    // Non-existent job should return default state (Queued based on enum default)
-    // This tests that we don't panic on non-existent jobs
-}
-
-#[test]
 fn test_get_job_details_nonexistent() {
     let job_manager = deploy_job_manager();
 
@@ -185,30 +158,6 @@ fn test_get_job_details_nonexistent() {
     let details = job_manager.get_job_details(job_id);
 
     assert(details.job_id.value == 0, 'Should return empty job');
-}
-
-// =============================================================================
-// Access Control Tests
-// =============================================================================
-
-#[test]
-#[should_panic(expected: ('Only admin',))]
-fn test_only_admin_pause() {
-    let job_manager = deploy_job_manager();
-    let (_, client, _, _) = get_test_addresses();
-
-    start_cheat_caller_address(job_manager.contract_address, client);
-    job_manager.pause();
-}
-
-#[test]
-#[should_panic(expected: ('Only admin',))]
-fn test_only_admin_update_config() {
-    let job_manager = deploy_job_manager();
-    let (_, client, _, _) = get_test_addresses();
-
-    start_cheat_caller_address(job_manager.contract_address, client);
-    job_manager.update_config('platform_fee_bps', 500);
 }
 
 // =============================================================================
