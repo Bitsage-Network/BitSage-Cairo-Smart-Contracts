@@ -1126,6 +1126,12 @@ mod JobManager {
                 return false;
             };
 
+            // Check if job exists (has a client)
+            let client = self.job_clients.read(job_key);
+            if client.is_zero() {
+                return false;
+            }
+
             let state = self.job_states.read(job_key);
             let deadline = self.job_deadlines.read(job_key);
             let current_time = get_block_timestamp();

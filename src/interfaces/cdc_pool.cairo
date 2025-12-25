@@ -74,9 +74,9 @@ pub struct SlashRecord {
 }
 
 /// Worker Staking Tier Enumeration (v3.1 - Realistic Capital Deployment)
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum WorkerTier {
+    #[default]
     Basic,          // $100 - entry level
     Premium,        // $500 - serious commitment  
     Enterprise,     // $2,500 - business tier
@@ -87,10 +87,10 @@ pub enum WorkerTier {
     Institutional,  // $500,000 - institutional grade
 }
 
-/// Large Holder Tier Enumeration (SAGE-Fixed with USD floors) 
-#[derive(Copy, Drop, Serde, starknet::Store)]
-#[allow(starknet::store_no_default_variant)]
+/// Large Holder Tier Enumeration (SAGE-Fixed with USD floors)
+#[derive(Copy, Drop, Serde, starknet::Store, Default)]
 pub enum HolderTier {
+    #[default]
     Regular,        // < 5M SAGE
     Whale,          // 5M+ SAGE + $2M+ USD value
     Institution,    // 25M+ SAGE + $10M+ USD value

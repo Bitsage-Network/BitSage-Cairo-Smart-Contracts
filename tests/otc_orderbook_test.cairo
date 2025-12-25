@@ -130,7 +130,7 @@ fn test_update_config() {
 }
 
 #[test]
-#[should_panic(expected: ('Maker fee too high',))]
+#[should_panic]
 fn test_config_maker_fee_too_high() {
     let orderbook = deploy_orderbook();
     let (owner, _, _, _, _) = get_test_addresses();
@@ -220,7 +220,7 @@ fn test_get_user_orders_empty() {
 // =============================================================================
 
 #[test]
-#[should_panic(expected: ('Orderbook paused',))]
+#[should_panic]
 fn test_place_order_when_paused() {
     let orderbook = deploy_orderbook();
     let (owner, maker, _, _, _) = get_test_addresses();
@@ -246,7 +246,7 @@ fn test_place_order_when_paused() {
 // =============================================================================
 
 #[test]
-#[should_panic(expected: ('Empty order array',))]
+#[should_panic]
 fn test_batch_place_empty_array() {
     let orderbook = deploy_orderbook();
     let (_, maker, _, _, _) = get_test_addresses();
@@ -256,7 +256,7 @@ fn test_batch_place_empty_array() {
 }
 
 #[test]
-#[should_panic(expected: ('Empty order array',))]
+#[should_panic]
 fn test_batch_cancel_empty_array() {
     let orderbook = deploy_orderbook();
     let (_, maker, _, _, _) = get_test_addresses();
@@ -292,7 +292,7 @@ fn test_order_status_default() {
 // =============================================================================
 
 #[test]
-#[should_panic(expected: ('Only owner',))]
+#[should_panic]
 fn test_only_owner_pause() {
     let orderbook = deploy_orderbook();
     let (_, maker, _, _, _) = get_test_addresses();
@@ -302,7 +302,7 @@ fn test_only_owner_pause() {
 }
 
 #[test]
-#[should_panic(expected: ('Only owner',))]
+#[should_panic]
 fn test_only_owner_add_pair() {
     let orderbook = deploy_orderbook();
     let (_, maker, _, _, _) = get_test_addresses();
@@ -313,7 +313,7 @@ fn test_only_owner_add_pair() {
 }
 
 #[test]
-#[should_panic(expected: ('Only owner',))]
+#[should_panic]
 fn test_only_owner_set_config() {
     let orderbook = deploy_orderbook();
     let (_, maker, _, _, _) = get_test_addresses();

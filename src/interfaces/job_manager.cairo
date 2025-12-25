@@ -60,9 +60,9 @@ pub struct JobResult {
 }
 
 // Job type enumeration
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum JobType {
+    #[default]
     AIInference,
     AITraining,
     ProofGeneration,
@@ -71,10 +71,10 @@ pub enum JobType {
     ConfidentialVM
 }
 
-// Verification method enumeration  
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+// Verification method enumeration
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum VerificationMethod {
+    #[default]
     None,
     StatisticalSampling,
     ZeroKnowledgeProof,
@@ -82,9 +82,9 @@ pub enum VerificationMethod {
 }
 
 // Job state enumeration
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum JobState {
+    #[default]
     Queued,
     Processing,
     Completed,

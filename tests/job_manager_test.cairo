@@ -29,6 +29,7 @@ fn get_test_addresses() -> (ContractAddress, ContractAddress, ContractAddress, C
 
 fn deploy_job_manager() -> IJobManagerDispatcher {
     let (owner, _, _, payment_token) = get_test_addresses();
+    let treasury: ContractAddress = 'treasury'.try_into().unwrap();
     let cdc_pool: ContractAddress = 'cdc_pool'.try_into().unwrap();
 
     let contract_class = declare("JobManager").unwrap().contract_class();
@@ -36,6 +37,7 @@ fn deploy_job_manager() -> IJobManagerDispatcher {
     let mut constructor_data = array![];
     constructor_data.append(owner.into());
     constructor_data.append(payment_token.into());
+    constructor_data.append(treasury.into());
     constructor_data.append(cdc_pool.into());
 
     let (contract_address, _) = contract_class.deploy(@constructor_data).unwrap();
@@ -157,7 +159,9 @@ fn test_get_job_details_nonexistent() {
     let job_id = JobId { value: 999 };
     let details = job_manager.get_job_details(job_id);
 
-    assert(details.job_id.value == 0, 'Should return empty job');
+    // For nonexistent jobs, client address should be zero
+    let zero_address: starknet::ContractAddress = 0.try_into().unwrap();
+    assert(details.client == zero_address, 'Should return empty job');
 }
 
 // =============================================================================
