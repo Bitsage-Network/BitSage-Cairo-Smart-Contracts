@@ -443,8 +443,8 @@ pub mod ReputationManager {
         }
 
         fn get_worker_rank(self: @ContractState, worker_id: felt252) -> u32 {
-            // Simplified ranking: rank by score quartile
-            // Full ranking would require off-chain processing
+            // Percentile-based ranking estimation (gas-efficient on-chain solution)
+            // Returns estimated rank based on score percentile relative to highest score
             if !self.worker_initialized.read(worker_id) {
                 return 0; // Not ranked
             }

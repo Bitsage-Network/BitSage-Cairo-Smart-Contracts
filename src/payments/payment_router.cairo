@@ -356,6 +356,9 @@ mod PaymentRouter {
     use sage_contracts::obelysk::elgamal::{encrypt, is_zero};
     use sage_contracts::growth::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
 
+    // Prover Staking for credit limit enforcement
+    use sage_contracts::staking::prover_staking::{IProverStakingDispatcher, IProverStakingDispatcherTrait};
+
     // Base SAGE price: $0.10 = 100000000000000000 (0.1 * 10^18)
     const BASE_SAGE_PRICE_USD: u256 = 100000000000000000;
     const USD_DECIMALS: u256 = 1000000000000000000; // 10^18
@@ -1004,19 +1007,28 @@ mod PaymentRouter {
 
             // If staking is configured and limit is enabled, enforce it
             if !config.staking_address.is_zero() && limit_bps > 0 {
-                // Query staked balance from staking contract
-                // Note: In production, this would use the staking contract interface
-                // For now, we use a simplified approach with a per-user absolute limit
-                // based on their first stake amount (stored separately or queried)
-                //
+                // Query actual staked balance from staking contract
+                let staking = IProverStakingDispatcher { contract_address: config.staking_address };
+                let stake_info = staking.get_stake(caller);
+
+                // Calculate maximum credit allowed based on staked amount
                 // max_credit = staked_balance * limit_bps / 10000
-                // Simplified: we'll enforce that new credits don't exceed limit
-                // Real implementation should query IProverStaking.get_stake_info()
+                // e.g., if limit_bps = 5000 (50%), user can get credit up to 50% of stake
+                let staked_balance = stake_info.amount;
+                let max_credit = (staked_balance * limit_bps) / BPS_DENOMINATOR;
+
+                // Calculate new total credits after this payment
                 let new_total_credits = credits_used + sage_amount;
 
-                // For safety, enforce a reasonable max credit per user
-                // This is a fallback; real limit comes from stake ratio
-                assert!(new_total_credits <= 1000000_u256 * USD_DECIMALS, "Staked credit limit exceeded");
+                // Enforce the stake-based credit limit
+                assert!(
+                    new_total_credits <= max_credit,
+                    "Credit limit exceeded: stake more SAGE to increase limit"
+                );
+
+                // Additional safety: absolute cap to prevent extreme leverage
+                let absolute_max: u256 = 10000000_u256 * USD_DECIMALS; // 10M SAGE max credit
+                assert!(new_total_credits <= absolute_max, "Absolute credit limit exceeded");
             }
 
             // CHECKS-EFFECTS-INTERACTIONS: Update state BEFORE external calls
@@ -1602,31 +1614,31 @@ mod PaymentRouter {
 
         fn get_available_staked_credit(self: @ContractState, user: ContractAddress) -> u256 {
             let config = self.otc_config.read();
-            let limit_bps = self.staked_credit_limit_bps.read();
+            let limit_bps: u256 = self.staked_credit_limit_bps.read().into();
 
-            // Get user's staked balance from staking contract
-            // If staking not configured, return 0
-            if config.staking_address.is_zero() {
+            // If staking not configured or limit is 0, no credit available
+            if config.staking_address.is_zero() || limit_bps == 0 {
                 return 0;
             }
 
-            // Import staking interface to get staked balance
-            // For now, we'll use a simplified calculation based on credits used
+            // Query user's staked balance from staking contract
+            let staking = IProverStakingDispatcher { contract_address: config.staking_address };
+            let stake_info = staking.get_stake(user);
+            let staked_balance = stake_info.amount;
+
+            // Calculate maximum credit allowed based on staked amount
+            // max_credit = staked_balance * limit_bps / 10000
+            let max_credit = (staked_balance * limit_bps) / BPS_DENOMINATOR;
+
+            // Get credits already used
             let credits_used = self.staked_credits_used.read(user);
 
-            // In production, query staking contract for actual staked balance
-            // max_credit = staked_balance * limit_bps / 10000
-            // available = max_credit - credits_used
-            //
-            // Since we don't have the staking balance here, we return the inverse:
-            // If limit_bps is 0, no credit is available
-            if limit_bps == 0 {
-                return 0;
+            // Available credit = max_credit - credits_used
+            if max_credit > credits_used {
+                max_credit - credits_used
+            } else {
+                0
             }
-
-            // Return credits used (caller should compare against their staked balance)
-            // In practice, this should query the staking contract
-            credits_used
         }
 
         // =========================================================================

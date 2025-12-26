@@ -106,6 +106,14 @@ mod BuybackEngine {
     use sage_contracts::interfaces::sage_token::{ISAGETokenDispatcher, ISAGETokenDispatcherTrait};
     use sage_contracts::oracle::pragma_oracle::{IOracleWrapperDispatcher, IOracleWrapperDispatcherTrait, PricePair};
 
+    // OTC Orderbook for executing buybacks
+    use sage_contracts::payments::otc_orderbook::{
+        IOTCOrderbookDispatcher, IOTCOrderbookDispatcherTrait, OrderSide
+    };
+
+    // Trading pair ID for SAGE/USDC
+    const SAGE_USDC_PAIR_ID: u8 = 0;
+
     const USD_DECIMALS: u256 = 1000000000000000000;  // 10^18
     const USDC_DECIMALS: u256 = 1000000;  // 10^6
     const BPS_DENOMINATOR: u256 = 10000;
@@ -249,9 +257,8 @@ mod BuybackEngine {
             // sage_amount = usdc_usd_value / sage_price
             let sage_amount = (usd_amount * USD_DECIMALS) / sage_price;
 
-            // Execute buyback (simplified - in production would use OTC/DEX)
-            // For now, we assume the execution venue will handle the swap
-            // and we just burn the SAGE tokens we receive
+            // Execute buyback via OTC orderbook
+            // The execution venue handles the swap, purchased SAGE is burned
             self._execute_and_burn(usdc_amount, sage_amount, sage_price);
         }
 
@@ -429,44 +436,68 @@ mod BuybackEngine {
             let caller = get_caller_address();
             let this = get_contract_address();
 
-            // In a production setup, we would:
-            // 1. Send USDC to execution venue (OTC/DEX)
-            // 2. Receive SAGE in return
-            // 3. Burn the received SAGE
-            //
-            // For this implementation, we simulate by:
-            // - Assuming SAGE tokens are already available (from OTC execution)
-            // - Or the execution venue handles the swap atomically
-
             let sage_token = ISAGETokenDispatcher { contract_address: self.sage_token.read() };
             let usdc = IERC20Dispatcher { contract_address: self.usdc_token.read() };
-
-            // Transfer USDC to execution venue (or treasury for manual OTC)
+            let sage_erc20 = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let venue = self.execution_venue.read();
+
+            let mut actual_purchased: u256 = 0;
+            let mut actual_burned: u256 = 0;
+
+            // Execute buyback through OTC Orderbook
             if !venue.is_zero() {
-                usdc.transfer(venue, usdc_amount);
+                let orderbook = IOTCOrderbookDispatcher { contract_address: venue };
+
+                // Step 1: Approve USDC spending by orderbook
+                usdc.approve(venue, usdc_amount);
+
+                // Step 2: Check orderbook liquidity before executing
+                let best_ask = orderbook.get_best_ask(SAGE_USDC_PAIR_ID);
+
+                if best_ask > 0 {
+                    // Step 3: Execute market buy order on OTC orderbook
+                    // This places a buy order for SAGE using USDC at market price
+                    // The orderbook will match against existing sell orders
+                    actual_purchased = orderbook.place_market_order(
+                        SAGE_USDC_PAIR_ID,
+                        OrderSide::Buy,
+                        usdc_amount  // Max USDC to spend
+                    );
+
+                    // Step 4: Check how much SAGE we received
+                    let sage_balance_after = sage_erc20.balance_of(this);
+
+                    // Step 5: Burn all received SAGE
+                    if sage_balance_after > 0 {
+                        sage_token.burn_from_revenue(sage_balance_after, usdc_amount, execution_price);
+                        actual_burned = sage_balance_after;
+                    }
+                } else {
+                    // No liquidity in orderbook - revert
+                    assert!(false, "No liquidity in OTC orderbook");
+                }
             } else {
-                // If no venue set, transfer to owner for manual OTC execution
-                usdc.transfer(self.owner.read(), usdc_amount);
+                // No venue configured - check if we have SAGE from previous execution
+                let sage_balance = sage_erc20.balance_of(this);
+
+                if sage_balance >= sage_amount {
+                    // Burn the SAGE we have
+                    sage_token.burn_from_revenue(sage_amount, usdc_amount, execution_price);
+                    actual_purchased = sage_amount;
+                    actual_burned = sage_amount;
+                } else if sage_balance > 0 {
+                    // Burn what we have
+                    sage_token.burn_from_revenue(sage_balance, usdc_amount, execution_price);
+                    actual_purchased = sage_balance;
+                    actual_burned = sage_balance;
+                } else {
+                    // No SAGE and no venue - transfer USDC to owner for manual execution
+                    usdc.transfer(self.owner.read(), usdc_amount);
+                    // Note: actual_purchased and actual_burned remain 0
+                }
             }
 
-            // Check if we have SAGE to burn (from previous OTC execution or DEX swap callback)
-            let sage_erc20 = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            let sage_balance = sage_erc20.balance_of(this);
-
-            let actual_burned = if sage_balance >= sage_amount {
-                // Burn the SAGE
-                // Note: In production, burn_from_revenue requires authorization
-                // This contract would need to be added to authorized burners
-                sage_token.burn_from_revenue(sage_amount, usdc_amount, execution_price);
-                sage_amount
-            } else if sage_balance > 0 {
-                // Burn what we have
-                sage_token.burn_from_revenue(sage_balance, usdc_amount, execution_price);
-                sage_balance
-            } else {
-                0
-            };
+            let actual_purchased_final = if actual_purchased == 0 { sage_amount } else { actual_purchased };
 
             // Update state
             let exec_count = self.execution_count.read() + 1;
@@ -476,7 +507,7 @@ mod BuybackEngine {
             let total_usdc = self.total_usdc_spent.read() + usdc_amount;
             self.total_usdc_spent.write(total_usdc);
 
-            let total_purchased = self.total_sage_purchased.read() + sage_amount;
+            let total_purchased = self.total_sage_purchased.read() + actual_purchased_final;
             self.total_sage_purchased.write(total_purchased);
 
             let total_burned = self.total_sage_burned.read() + actual_burned;
@@ -486,7 +517,7 @@ mod BuybackEngine {
             let execution = BuybackExecution {
                 execution_id: exec_count,
                 usdc_spent: usdc_amount,
-                sage_purchased: sage_amount,
+                sage_purchased: actual_purchased_final,
                 sage_burned: actual_burned,
                 execution_price,
                 executed_at: now,
@@ -497,7 +528,7 @@ mod BuybackEngine {
             self.emit(BuybackExecuted {
                 execution_id: exec_count,
                 usdc_spent: usdc_amount,
-                sage_purchased: sage_amount,
+                sage_purchased: actual_purchased_final,
                 sage_burned: actual_burned,
                 execution_price,
                 executor: caller,

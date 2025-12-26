@@ -89,6 +89,11 @@ mod CDCPool {
         next_unstake_id: felt252,
         total_staked: u256,
         min_stake: u256,
+
+        // Per-worker unstake request tracking
+        worker_unstake_requests: Map<(ContractAddress, u32), felt252>, // (worker, index) -> request_id
+        worker_unstake_count: Map<ContractAddress, u32>, // worker -> pending request count
+        unstake_request_processed: Map<felt252, bool>, // request_id -> is_processed
         
         // Reputation and performance tracking
         worker_reputation: Map<felt252, u64>,
@@ -387,7 +392,12 @@ mod CDCPool {
             
             self.unstake_requests.write(unstake_id, request);
             self.next_unstake_id.write(unstake_id + 1);
-            
+
+            // Track this request for the worker
+            let worker_request_count = self.worker_unstake_count.read(caller);
+            self.worker_unstake_requests.write((caller, worker_request_count), unstake_id);
+            self.worker_unstake_count.write(caller, worker_request_count + 1);
+
             self.emit(Event::UnstakeRequested(UnstakeRequested {
                 worker: caller,
                 amount,
@@ -407,32 +417,60 @@ mod CDCPool {
         fn complete_unstake(ref self: ContractState) {
             self._reentrancy_guard_start();
             let caller = get_caller_address();
-            // Find and process unstake request for caller
-            // Simplified implementation - in reality would need to track individual requests
-            let stake_info = self.stakes.read(caller);
-            
-            if stake_info.locked_until <= get_block_timestamp() {
+            let current_time = get_block_timestamp();
+            let mut stake_info = self.stakes.read(caller);
+
+            // Process all matured unstake requests for this worker
+            let request_count = self.worker_unstake_count.read(caller);
+            let mut total_unstaked: u256 = 0;
+            let mut i: u32 = 0;
+
+            while i < request_count {
+                let request_id = self.worker_unstake_requests.read((caller, i));
+
+                // Skip already processed requests
+                if self.unstake_request_processed.read(request_id) {
+                    i += 1;
+                    continue;
+                }
+
+                let request = self.unstake_requests.read(request_id);
+
+                // Check if this request has matured
+                if request.unlock_time <= current_time {
+                    // Mark as processed
+                    self.unstake_request_processed.write(request_id, true);
+                    total_unstaked += request.amount;
+
+                    self.emit(Event::UnstakeExecuted(UnstakeExecuted {
+                        worker: caller,
+                        amount: request.amount,
+                    }));
+                }
+
+                i += 1;
+            };
+
+            // If any requests were processed, update stake and transfer tokens
+            if total_unstaked > 0 {
+                assert!(stake_info.amount >= total_unstaked, "CDC: stake underflow");
+                stake_info.amount -= total_unstaked;
+                stake_info.last_adjustment = current_time;
+
+                // Update total staked
+                let total = self.total_staked.read();
+                if total >= total_unstaked {
+                    self.total_staked.write(total - total_unstaked);
+                }
+
+                self.stakes.write(caller, stake_info);
+
+                // Transfer tokens back to worker
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                let transfer_success = sage_token.transfer(caller, stake_info.amount);
+                let transfer_success = sage_token.transfer(caller, total_unstaked);
                 assert!(transfer_success, "CDC: transfer failed");
-                
-                let empty_stake = StakeInfo {
-                    amount: 0,
-                    usd_value: 0,
-                    tier: WorkerTier::Basic,
-                    locked_until: 0,
-                    last_adjustment: 0,
-                    last_reward_block: 0,
-                    delegated_amount: 0,
-                    performance_score: 0,
-                };
-                self.stakes.write(caller, empty_stake);
-                
-                self.emit(Event::UnstakeExecuted(UnstakeExecuted {
-                    worker: caller,
-                    amount: stake_info.amount,
-                }));
             }
+
             self._reentrancy_guard_end();
         }
 
@@ -470,32 +508,84 @@ mod CDCPool {
             assert!(max_latency <= SECONDS_PER_WEEK, "Max latency exceeds 7 days");
             assert!(requirements.min_memory_gb > 0, "Memory requirement must be positive");
 
-            // Simplified allocation algorithm - find first available worker
+            // Production allocation algorithm with multi-factor scoring
             let zero_address: ContractAddress = 0.try_into().unwrap();
             let mut best_worker = zero_address;
-            let mut best_score = 0;
+            let mut best_score: u8 = 0;
+            let mut best_worker_id: felt252 = 0;
             let mut worker_id_u256: u256 = 1;
             let max_worker_id: u256 = self.next_worker_id.read().into();
-            
-            // In a real implementation, this would be more sophisticated
+
             while worker_id_u256 != max_worker_id {
                 let worker_id_felt: felt252 = worker_id_u256.try_into().unwrap();
                 let status = self.worker_status.read(worker_id_felt);
+
                 if status == WorkerStatus::Active {
                     let capabilities = self.worker_capabilities.read(worker_id_felt);
+
+                    // Check minimum requirements
                     if capabilities.gpu_memory >= requirements.min_memory_gb.into() {
-                        best_worker = self.worker_owners.read(worker_id_felt);
-                        best_score = 90; // High confidence
-                        break;
+                        // Calculate worker score based on multiple factors (max 95)
+                        let mut score: u8 = 50; // Base score for meeting requirements
+
+                        // Factor 1: Reputation (0-20 points)
+                        let reputation = self.worker_reputation.read(worker_id_felt);
+                        let reputation_score: u8 = if reputation >= 100 {
+                            20
+                        } else if reputation >= 80 {
+                            15
+                        } else if reputation >= 60 {
+                            10
+                        } else {
+                            5
+                        };
+                        score += reputation_score;
+
+                        // Factor 2: Performance history (0-15 points)
+                        let jobs_completed = self.worker_jobs_completed.read(worker_id_felt);
+                        let jobs_failed = self.worker_jobs_failed.read(worker_id_felt);
+                        let total_jobs = jobs_completed + jobs_failed;
+                        let perf_score: u8 = if total_jobs == 0 {
+                            8 // New worker gets middle score
+                        } else {
+                            let success_rate = (jobs_completed * 100) / total_jobs;
+                            if success_rate >= 98 { 15 }
+                            else if success_rate >= 95 { 12 }
+                            else if success_rate >= 90 { 9 }
+                            else if success_rate >= 80 { 6 }
+                            else { 3 }
+                        };
+                        score += perf_score;
+
+                        // Factor 3: Tier bonus (0-10 points)
+                        let worker_owner = self.worker_owners.read(worker_id_felt);
+                        let stake_info = self.stakes.read(worker_owner);
+                        let tier_score: u8 = match stake_info.tier {
+                            WorkerTier::Basic => 0,
+                            WorkerTier::Premium => 2,
+                            WorkerTier::Enterprise => 4,
+                            WorkerTier::Infrastructure => 6,
+                            WorkerTier::Fleet => 7,
+                            WorkerTier::Datacenter => 8,
+                            WorkerTier::Hyperscale => 9,
+                            WorkerTier::Institutional => 10,
+                        };
+                        score += tier_score;
+
+                        // Update best if this worker scores higher
+                        if score > best_score {
+                            best_score = score;
+                            best_worker = worker_owner;
+                            best_worker_id = worker_id_felt;
+                        }
                     }
                 }
                 worker_id_u256 += 1;
             };
-            
+
             if best_worker != zero_address {
                 let job_key: felt252 = job_id.value.try_into().unwrap();
-                let worker_id_felt: felt252 = worker_id_u256.try_into().unwrap();
-                self.job_allocations.write(job_key, worker_id_felt);
+                self.job_allocations.write(job_key, best_worker_id);
                 
                 let allocation = AllocationResult {
                     worker: best_worker,
@@ -505,7 +595,7 @@ mod CDCPool {
                 
                 self.emit(Event::JobAllocated(JobAllocated {
                     job_id,
-                    worker_id: WorkerId { value: worker_id_felt },
+                    worker_id: WorkerId { value: best_worker_id },
                     confidence_score: best_score,
                     estimated_completion: allocation.estimated_completion,
                 }));
@@ -905,23 +995,87 @@ mod CDCPool {
             metric: felt252,
             limit: u32
         ) -> Array<WorkerId> {
-            // Simplified leaderboard - in reality would need sorting
-            let mut workers = array![];
-            let mut found = 0;
-            let mut worker_id_u256: u256 = 1;
+            // Production leaderboard with selection sort for top N
+            // Metric types: 'reputation' = 1, 'jobs' = 2, 'earnings' = 3
             let max_worker_id: u256 = self.next_worker_id.read().into();
-            
-            while worker_id_u256 != max_worker_id && found != limit {
+
+            // First pass: collect all active workers with their scores
+            let mut worker_scores: Array<(felt252, u256)> = array![];
+            let mut worker_id_u256: u256 = 1;
+
+            while worker_id_u256 != max_worker_id {
                 let worker_id_felt: felt252 = worker_id_u256.try_into().unwrap();
                 let status = self.worker_status.read(worker_id_felt);
+
                 if status == WorkerStatus::Active {
-                    workers.append(WorkerId { value: worker_id_felt });
-                    found += 1;
+                    let score: u256 = if metric == 1 {
+                        // Reputation metric
+                        self.worker_reputation.read(worker_id_felt).into()
+                    } else if metric == 2 {
+                        // Jobs completed metric
+                        self.worker_jobs_completed.read(worker_id_felt).into()
+                    } else if metric == 3 {
+                        // Earnings metric
+                        self.worker_total_earnings.read(worker_id_felt)
+                    } else {
+                        // Default to reputation
+                        self.worker_reputation.read(worker_id_felt).into()
+                    };
+
+                    worker_scores.append((worker_id_felt, score));
                 }
+
                 worker_id_u256 += 1;
             };
-            
-            workers
+
+            // Selection sort for top N (O(n * limit) - efficient for small limit)
+            let mut result: Array<WorkerId> = array![];
+            let mut selected: Array<usize> = array![];
+            let total_workers = worker_scores.len();
+            let mut found: u32 = 0;
+
+            while found < limit && found < total_workers.try_into().unwrap() {
+                let mut best_idx: usize = 0;
+                let mut best_score: u256 = 0;
+                let mut best_worker: felt252 = 0;
+                let mut already_selected: bool = false;
+
+                // Find highest scoring unselected worker
+                let mut i: usize = 0;
+                while i < total_workers {
+                    // Check if already selected
+                    already_selected = false;
+                    let mut j: usize = 0;
+                    while j < selected.len() {
+                        if *selected.at(j) == i {
+                            already_selected = true;
+                            break;
+                        }
+                        j += 1;
+                    };
+
+                    if !already_selected {
+                        let (worker_id, score) = *worker_scores.at(i);
+                        if score > best_score || best_worker == 0 {
+                            best_score = score;
+                            best_worker = worker_id;
+                            best_idx = i;
+                        }
+                    }
+
+                    i += 1;
+                };
+
+                if best_worker != 0 {
+                    result.append(WorkerId { value: best_worker });
+                    selected.append(best_idx);
+                    found += 1;
+                } else {
+                    break;
+                }
+            };
+
+            result
         }
 
         fn get_stake_info(self: @ContractState, worker: ContractAddress) -> StakeInfo {
@@ -932,8 +1086,23 @@ mod CDCPool {
             self: @ContractState,
             worker: ContractAddress
         ) -> Array<UnstakeRequest> {
-            // Simplified - would need to track per-worker requests
-            array![]
+            let mut requests: Array<UnstakeRequest> = array![];
+            let request_count = self.worker_unstake_count.read(worker);
+            let mut i: u32 = 0;
+
+            while i < request_count {
+                let request_id = self.worker_unstake_requests.read((worker, i));
+
+                // Only include unprocessed requests
+                if !self.unstake_request_processed.read(request_id) {
+                    let request = self.unstake_requests.read(request_id);
+                    requests.append(request);
+                }
+
+                i += 1;
+            };
+
+            requests
         }
 
         fn get_unstake_requests(
@@ -941,8 +1110,31 @@ mod CDCPool {
             offset: u32,
             limit: u32
         ) -> Array<UnstakeRequest> {
-            // Simplified implementation
-            array![]
+            let mut requests: Array<UnstakeRequest> = array![];
+            let total_requests: u32 = self.next_unstake_id.read().try_into().unwrap_or(0);
+
+            if offset >= total_requests {
+                return requests;
+            }
+
+            let end = if offset + limit > total_requests {
+                total_requests
+            } else {
+                offset + limit
+            };
+
+            let mut i: u32 = offset;
+            while i < end {
+                let request_id: felt252 = i.into();
+                // Only include unprocessed requests
+                if !self.unstake_request_processed.read(request_id) {
+                    let request = self.unstake_requests.read(request_id);
+                    requests.append(request);
+                }
+                i += 1;
+            };
+
+            requests
         }
 
         // Worker Tier Functions

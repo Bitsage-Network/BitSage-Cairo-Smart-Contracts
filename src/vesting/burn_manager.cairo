@@ -102,27 +102,50 @@ pub mod BurnManager {
     };
     use core::num::traits::Zero;
 
+    // Oracle for price feed
+    use sage_contracts::oracle::pragma_oracle::{
+        IOracleWrapperDispatcher, IOracleWrapperDispatcherTrait, PricePair
+    };
+
+    // OTC Orderbook for executing buybacks
+    use sage_contracts::payments::otc_orderbook::{
+        IOTCOrderbookDispatcher, IOTCOrderbookDispatcherTrait, OrderSide
+    };
+
+
+    // ERC20 for token transfers
+    use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+
+    // Constants
+    const BPS_DENOMINATOR: u256 = 10000;
+    const SAGE_USDC_PAIR_ID: u8 = 0;
+
     #[storage]
     struct Storage {
         // Core state
         owner: ContractAddress,
         token_contract: ContractAddress,
         treasury_contract: ContractAddress,
-        
+
+        // Price and execution infrastructure
+        oracle_address: ContractAddress,
+        otc_orderbook: ContractAddress,
+        usdc_token: ContractAddress,
+
         // Burn schedules
         schedule_count: u256,
         schedules: Map<u256, BurnSchedule>,
         last_burn_time: Map<u256, u64>,
-        
+
         // Revenue burns
         revenue_config: RevenueBurnConfig,
         accumulated_revenue: u256,
         last_revenue_burn: u64,
-        
+
         // Buyback configuration
         buyback_config: BuybackConfig,
         last_buyback_time: u64,
-        
+
         // Statistics
         total_burned: u256,
         total_revenue_burned: u256,
@@ -379,42 +402,98 @@ pub mod BurnManager {
         fn execute_buyback_burn(ref self: ContractState, eth_amount: u256, expected_tokens: u256) -> u256 {
             self._assert_only_owner();
             self._assert_not_paused();
-            
+
             let config = self.buyback_config.read();
             let current_time = get_block_timestamp();
-            
+
             // Check cooldown period
             let last_buyback = self.last_buyback_time.read();
             assert(current_time - last_buyback >= config.cooldown_period, 'Cooldown period active');
-            
+
             // Validate amounts
             assert(eth_amount > 0, 'ETH amount must be positive');
             assert(expected_tokens > 0, 'Expected tokens > 0');
-            
-            // Calculate slippage (simplified - in real implementation would use DEX oracle)
-            let average_price = eth_amount / expected_tokens;
-            
-            // In real implementation, would:
-            // 1. Check current market price against threshold
-            // 2. Execute DEX swap
-            // 3. Validate slippage
-            // 4. Burn received tokens
-            
-            // For now, simulate the process
-            let tokens_bought = expected_tokens; // Assume perfect execution
-            
-            // Execute burn
-            self._burn_tokens(tokens_bought);
+
+            // === STEP 1: Get current oracle price for slippage calculation ===
+            let oracle_addr = self.oracle_address.read();
+            let oracle_price = if !oracle_addr.is_zero() {
+                let oracle = IOracleWrapperDispatcher { contract_address: oracle_addr };
+                oracle.get_price_usd(PricePair::SAGE_USD)
+            } else {
+                // Fallback: calculate from expected values
+                eth_amount * 1000000000000000000 / expected_tokens // 18 decimals
+            };
+
+            // Check price threshold
+            if config.price_threshold > 0 {
+                assert(oracle_price <= config.price_threshold, 'Price exceeds threshold');
+            }
+
+            // === STEP 2: Execute through OTC Orderbook ===
+            let orderbook_addr = self.otc_orderbook.read();
+            let usdc_addr = self.usdc_token.read();
+            let mut tokens_bought: u256 = 0;
+            let mut actual_price: u256 = oracle_price;
+
+            if !orderbook_addr.is_zero() && !usdc_addr.is_zero() {
+                let orderbook = IOTCOrderbookDispatcher { contract_address: orderbook_addr };
+                let usdc = IERC20Dispatcher { contract_address: usdc_addr };
+
+                // Check orderbook liquidity
+                let best_ask = orderbook.get_best_ask(SAGE_USDC_PAIR_ID);
+                assert(best_ask > 0, 'No liquidity in orderbook');
+
+                // === STEP 3: Calculate slippage protection ===
+                // max_acceptable_price = oracle_price * (1 + max_slippage/10000)
+                let max_slippage_bps: u256 = config.max_slippage.into();
+                let max_acceptable_price = (oracle_price * (BPS_DENOMINATOR + max_slippage_bps)) / BPS_DENOMINATOR;
+
+                // Verify orderbook ask price is within slippage tolerance
+                assert(best_ask <= max_acceptable_price, 'Slippage exceeds maximum');
+
+                // Approve USDC spending
+                usdc.approve(orderbook_addr, eth_amount);
+
+                // Execute market buy order
+                tokens_bought = orderbook.place_market_order(
+                    SAGE_USDC_PAIR_ID,
+                    OrderSide::Buy,
+                    eth_amount
+                );
+
+                // === STEP 4: Verify execution slippage ===
+                if tokens_bought > 0 {
+                    actual_price = eth_amount * 1000000000000000000 / tokens_bought;
+
+                    // Verify actual slippage is within tolerance
+                    let slippage = if actual_price > oracle_price {
+                        ((actual_price - oracle_price) * BPS_DENOMINATOR) / oracle_price
+                    } else {
+                        0
+                    };
+                    assert(slippage <= max_slippage_bps, 'Execution slippage exceeded');
+                }
+            } else {
+                // No orderbook configured - use expected tokens as estimate
+                tokens_bought = expected_tokens;
+                actual_price = eth_amount * 1000000000000000000 / expected_tokens;
+            }
+
+            // === STEP 5: Burn purchased tokens ===
+            if tokens_bought > 0 {
+                self._burn_tokens(tokens_bought);
+            }
+
             self.total_buyback_burned.write(self.total_buyback_burned.read() + tokens_bought);
             self.last_buyback_time.write(current_time);
-            
+
             self.emit(BuybackExecuted {
                 eth_amount,
                 tokens_bought,
                 tokens_burned: tokens_bought,
-                average_price,
+                average_price: actual_price,
             });
-            
+
             tokens_bought
         }
 

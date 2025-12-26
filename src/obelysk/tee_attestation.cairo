@@ -705,10 +705,20 @@ pub fn verify_attestation(
 // Certificate Chain Validation
 // ============================================================================
 
-/// Trusted root certificate hashes (would be set in storage for updateability)
-pub const INTEL_ROOT_CERT_HASH: felt252 = 0x1234; // Placeholder - set actual hash
-pub const AMD_ROOT_CERT_HASH: felt252 = 0x2345; // Placeholder - set actual hash
-pub const NVIDIA_ROOT_CERT_HASH: felt252 = 0x3456; // Placeholder - set actual hash
+/// DEPLOYMENT CONFIGURATION: Trusted Root Certificate Hashes
+///
+/// These constants are reference values. In production:
+/// 1. Use OptimisticTEE.add_trusted_root() to register actual root hashes
+/// 2. Root hashes are the keccak256 of the DER-encoded root certificates
+/// 3. Obtain root certificates from official attestation PKI:
+///    - Intel TDX: https://api.trustedservices.intel.com/sgx/certification/v4/
+///    - AMD SEV-SNP: https://developer.amd.com/sev/
+///    - NVIDIA CC: https://docs.nvidia.com/confidential-computing/
+///
+/// Root hashes should be verified against vendor documentation before deployment
+pub const INTEL_ROOT_CERT_HASH: felt252 = 0x0; // Set via add_trusted_root()
+pub const AMD_ROOT_CERT_HASH: felt252 = 0x0; // Set via add_trusted_root()
+pub const NVIDIA_ROOT_CERT_HASH: felt252 = 0x0; // Set via add_trusted_root()
 
 /// Validate certificate chain hash against trusted roots
 pub fn validate_cert_chain(

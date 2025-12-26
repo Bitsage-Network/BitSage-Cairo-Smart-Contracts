@@ -104,6 +104,22 @@ mod OptimisticTEE {
         verified_attestations: Map<u256, felt252>, // job_id -> attestation hash
         // TEE type per job
         job_tee_types: Map<u256, u8>,             // job_id -> TEE type used
+
+        // === TRUSTED ROOT CERTIFICATE MANAGEMENT ===
+        // Intel TDX trusted roots
+        intel_trusted_roots: Map<u32, felt252>,    // index -> root cert hash
+        intel_root_count: u32,                     // Number of Intel roots
+        intel_root_valid: Map<felt252, bool>,      // hash -> is_valid
+
+        // AMD SEV-SNP trusted roots
+        amd_trusted_roots: Map<u32, felt252>,      // index -> root cert hash
+        amd_root_count: u32,                       // Number of AMD roots
+        amd_root_valid: Map<felt252, bool>,        // hash -> is_valid
+
+        // NVIDIA CC trusted roots
+        nvidia_trusted_roots: Map<u32, felt252>,   // index -> root cert hash
+        nvidia_root_count: u32,                    // Number of NVIDIA roots
+        nvidia_root_valid: Map<felt252, bool>,     // hash -> is_valid
     }
 
     #[event]
@@ -121,6 +137,9 @@ mod OptimisticTEE {
         ChallengerRewarded: ChallengerRewarded,
         ChallengerSlashed: ChallengerSlashed,
         ChallengeStakeCollected: ChallengeStakeCollected,
+        // Trusted root events
+        TrustedRootAdded: TrustedRootAdded,
+        TrustedRootRevoked: TrustedRootRevoked,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -206,6 +225,23 @@ mod OptimisticTEE {
         #[key]
         challenger: ContractAddress,
         stake_amount: u256,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct TrustedRootAdded {
+        #[key]
+        tee_type: u8,
+        root_hash: felt252,
+        index: u32,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct TrustedRootRevoked {
+        #[key]
+        tee_type: u8,
+        root_hash: felt252,
         timestamp: u64,
     }
 
@@ -681,6 +717,108 @@ mod OptimisticTEE {
             self.challenge_stake.write(stake);
         }
 
+        // =====================================================================
+        // TRUSTED ROOT CERTIFICATE MANAGEMENT
+        // =====================================================================
+
+        /// Add a trusted root certificate hash for a TEE type
+        /// tee_type: 1 = Intel TDX, 2 = AMD SEV-SNP, 3 = NVIDIA CC
+        fn add_trusted_root(ref self: ContractState, tee_type: u8, root_hash: felt252) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(root_hash != 0, "Invalid root hash");
+
+            let current_time = get_block_timestamp();
+
+            if tee_type == TEE_TYPE_INTEL_TDX {
+                assert!(!self.intel_root_valid.read(root_hash), "Root already added");
+                let index = self.intel_root_count.read();
+                self.intel_trusted_roots.write(index, root_hash);
+                self.intel_root_count.write(index + 1);
+                self.intel_root_valid.write(root_hash, true);
+                self.emit(TrustedRootAdded { tee_type, root_hash, index, timestamp: current_time });
+            } else if tee_type == TEE_TYPE_AMD_SEV_SNP {
+                assert!(!self.amd_root_valid.read(root_hash), "Root already added");
+                let index = self.amd_root_count.read();
+                self.amd_trusted_roots.write(index, root_hash);
+                self.amd_root_count.write(index + 1);
+                self.amd_root_valid.write(root_hash, true);
+                self.emit(TrustedRootAdded { tee_type, root_hash, index, timestamp: current_time });
+            } else if tee_type == TEE_TYPE_NVIDIA_CC {
+                assert!(!self.nvidia_root_valid.read(root_hash), "Root already added");
+                let index = self.nvidia_root_count.read();
+                self.nvidia_trusted_roots.write(index, root_hash);
+                self.nvidia_root_count.write(index + 1);
+                self.nvidia_root_valid.write(root_hash, true);
+                self.emit(TrustedRootAdded { tee_type, root_hash, index, timestamp: current_time });
+            } else {
+                panic!("Invalid TEE type");
+            }
+        }
+
+        /// Revoke a trusted root certificate hash
+        fn revoke_trusted_root(ref self: ContractState, tee_type: u8, root_hash: felt252) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            let current_time = get_block_timestamp();
+
+            if tee_type == TEE_TYPE_INTEL_TDX {
+                assert!(self.intel_root_valid.read(root_hash), "Root not found");
+                self.intel_root_valid.write(root_hash, false);
+            } else if tee_type == TEE_TYPE_AMD_SEV_SNP {
+                assert!(self.amd_root_valid.read(root_hash), "Root not found");
+                self.amd_root_valid.write(root_hash, false);
+            } else if tee_type == TEE_TYPE_NVIDIA_CC {
+                assert!(self.nvidia_root_valid.read(root_hash), "Root not found");
+                self.nvidia_root_valid.write(root_hash, false);
+            } else {
+                panic!("Invalid TEE type");
+            }
+
+            self.emit(TrustedRootRevoked { tee_type, root_hash, timestamp: current_time });
+        }
+
+        /// Check if a root certificate hash is trusted for a TEE type
+        fn is_trusted_root(self: @ContractState, tee_type: u8, root_hash: felt252) -> bool {
+            if tee_type == TEE_TYPE_INTEL_TDX {
+                self.intel_root_valid.read(root_hash)
+            } else if tee_type == TEE_TYPE_AMD_SEV_SNP {
+                self.amd_root_valid.read(root_hash)
+            } else if tee_type == TEE_TYPE_NVIDIA_CC {
+                self.nvidia_root_valid.read(root_hash)
+            } else {
+                false
+            }
+        }
+
+        /// Get count of trusted roots for a TEE type
+        fn get_trusted_root_count(self: @ContractState, tee_type: u8) -> u32 {
+            if tee_type == TEE_TYPE_INTEL_TDX {
+                self.intel_root_count.read()
+            } else if tee_type == TEE_TYPE_AMD_SEV_SNP {
+                self.amd_root_count.read()
+            } else if tee_type == TEE_TYPE_NVIDIA_CC {
+                self.nvidia_root_count.read()
+            } else {
+                0
+            }
+        }
+
+        /// Get trusted root at index for a TEE type
+        fn get_trusted_root_at(self: @ContractState, tee_type: u8, index: u32) -> felt252 {
+            if tee_type == TEE_TYPE_INTEL_TDX {
+                assert!(index < self.intel_root_count.read(), "Index out of bounds");
+                self.intel_trusted_roots.read(index)
+            } else if tee_type == TEE_TYPE_AMD_SEV_SNP {
+                assert!(index < self.amd_root_count.read(), "Index out of bounds");
+                self.amd_trusted_roots.read(index)
+            } else if tee_type == TEE_TYPE_NVIDIA_CC {
+                assert!(index < self.nvidia_root_count.read(), "Index out of bounds");
+                self.nvidia_trusted_roots.read(index)
+            } else {
+                0
+            }
+        }
+
         fn get_result_status(self: @ContractState, job_id: u256) -> u8 {
             self.tee_results.read(job_id).status
         }
@@ -1080,6 +1218,10 @@ pub trait IOptimisticTEE<TContractState> {
     fn set_prover_staking(ref self: TContractState, staking: ContractAddress);
     fn set_require_staking(ref self: TContractState, required: bool);
 
+    // Trusted root certificate management
+    fn add_trusted_root(ref self: TContractState, tee_type: u8, root_hash: felt252);
+    fn revoke_trusted_root(ref self: TContractState, tee_type: u8, root_hash: felt252);
+
     // =========================================================================
     // VIEW FUNCTIONS
     // =========================================================================
@@ -1119,5 +1261,10 @@ pub trait IOptimisticTEE<TContractState> {
 
     /// Get verified attestation hash for audit trail
     fn get_attestation_hash(self: @TContractState, job_id: u256) -> felt252;
+
+    // Trusted root certificate view functions
+    fn is_trusted_root(self: @TContractState, tee_type: u8, root_hash: felt252) -> bool;
+    fn get_trusted_root_count(self: @TContractState, tee_type: u8) -> u32;
+    fn get_trusted_root_at(self: @TContractState, tee_type: u8, index: u32) -> felt252;
 }
 
