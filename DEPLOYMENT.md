@@ -11,6 +11,9 @@ const PRAGMA_ORACLE: felt252 = 0x2a85bd616f912537c50a49a4076db02c00b29b2cdc8a197
 
 // ETH Token (for gas estimation)
 const ETH_ADDRESS: felt252 = 0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7;
+
+// STRK Token (primary gas token on Starknet)
+const STRK_ADDRESS: felt252 = 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d;
 ```
 
 ## Deployment Order
@@ -28,6 +31,7 @@ Deploy contracts in this order (each depends on previous):
 9. **Job Manager** (needs Router, CDC) → Returns `JOB_ADDRESS`
 10. **Optimistic TEE** (needs Staking, Payment) → Returns `TEE_ADDRESS`
 11. **Privacy Router** (needs SAGE) → Returns `PRIVACY_ADDRESS`
+12. **Stealth Registry** (needs SAGE) → Returns `STEALTH_ADDRESS`
 
 ---
 
@@ -157,6 +161,69 @@ sage_token.add_emergency_council(YOUR_MULTISIG_ADDRESS);
 sage_token.add_emergency_council(BACKUP_ADDRESS);
 ```
 
+### 6. Privacy System Setup (Stealth Addresses)
+
+**Link Stealth Registry to Privacy Router:**
+```cairo
+// Connect stealth registry for address masking
+privacy_router.set_stealth_registry(STEALTH_ADDRESS);
+```
+
+**Worker Registration (each GPU worker does this):**
+```cairo
+// Worker generates stealth keypair off-chain:
+// - spending_key: secret for claiming payments
+// - viewing_key: secret for scanning payments
+// - Derives: spending_pubkey = spending_key * G
+// - Derives: viewing_pubkey = viewing_key * G
+
+// Register meta-address on-chain
+stealth_registry.register_meta_address(spending_pubkey, viewing_pubkey);
+```
+
+**How Stealth Payments Work:**
+```cairo
+// Client pays worker with address privacy:
+// 1. Look up worker's meta-address
+// 2. Generate random ephemeral_secret
+// 3. System derives one-time stealth address
+// 4. Payment goes to stealth address (unlinkable to worker)
+
+privacy_router.send_stealth_worker_payment(
+    job_id: job_id,
+    worker: worker_address,
+    sage_amount: payment_amount,
+    ephemeral_secret: random_felt252(),
+    encryption_randomness: random_felt252()
+);
+
+// Worker claims later:
+// 1. Scans announcements using viewing_key
+// 2. Derives spending key for their payments
+// 3. Claims with spending proof
+stealth_registry.claim_stealth_payment(
+    announcement_index,
+    spending_proof,
+    recipient_address
+);
+```
+
+### 7. Contract Linking (Cross-References)
+
+After all contracts are deployed, link them together:
+
+```cairo
+// Payment Router needs to know about other contracts
+payment_router.set_obelysk_router(PRIVACY_ADDRESS);
+payment_router.set_staker_rewards_pool(STAKING_ADDRESS);
+
+// Job Manager needs payment integration
+job_manager.set_proof_gated_payment(ROUTER_ADDRESS);
+
+// CDC Pool needs reputation manager
+cdc_pool.set_reputation_manager(REPUTATION_ADDRESS);
+```
+
 ---
 
 ## Gas Estimates
@@ -174,9 +241,12 @@ sage_token.add_emergency_council(BACKUP_ADDRESS);
 | Job Manager | ~0.015 ETH |
 | Optimistic TEE | ~0.02 ETH |
 | Privacy Router | ~0.015 ETH |
-| **TOTAL** | **~0.17 ETH** |
+| Stealth Registry | ~0.015 ETH |
+| **TOTAL** | **~0.185 ETH** |
 
-Recommend having **0.25+ ETH** for deployments + post-config transactions.
+Recommend having **0.25+ ETH** (or equivalent STRK) for deployments + post-config transactions.
+
+**Note:** Starknet uses STRK as primary gas token. ETH also works. Check current gas prices at https://starkscan.co/
 
 ---
 
@@ -191,6 +261,43 @@ After deployment, verify:
 - [ ] TEE root certificates added
 - [ ] Emergency council addresses set
 - [ ] All contract addresses linked correctly
+- [ ] Privacy Router connected to Stealth Registry
+- [ ] Test stealth payment flow works end-to-end
+
+---
+
+## Upgradability
+
+The following contracts support timelock-protected upgrades:
+
+| Contract | Timelock | Upgrade Functions |
+|----------|----------|-------------------|
+| SAGE Token | Custom | `schedule_upgrade`, `execute_upgrade`, `cancel_upgrade` |
+| OTC Orderbook | 2 days | `schedule_upgrade`, `execute_upgrade`, `cancel_upgrade` |
+| Payment Router | 2 days | `schedule_upgrade`, `execute_upgrade`, `cancel_upgrade` |
+| Job Manager | 2 days | `schedule_upgrade`, `execute_upgrade`, `cancel_upgrade` |
+
+**How to upgrade a contract:**
+```cairo
+// 1. Deploy new contract class, get class hash
+// starknet declare --contract new_contract.sierra.json
+
+// 2. Schedule upgrade (starts timelock)
+contract.schedule_upgrade(new_class_hash);
+
+// 3. Wait for timelock (2 days)
+
+// 4. Execute upgrade
+contract.execute_upgrade();
+
+// Or cancel if needed
+contract.cancel_upgrade();
+```
+
+**Check upgrade status:**
+```cairo
+let (pending_hash, scheduled_at, execute_after, delay) = contract.get_upgrade_info();
+```
 
 ---
 
@@ -225,3 +332,63 @@ sage_token.create_typed_proposal(
 // If passed, execute after voting period
 sage_token.execute_proposal(proposal_id);
 ```
+
+---
+
+## Monitoring & Analytics
+
+### OTC Orderbook Analytics
+
+```cairo
+// Get TWAP (Time-Weighted Average Price)
+let twap = otc_orderbook.get_twap(pair_id);
+
+// Get 24h stats: (volume, high, low, last_price)
+let (volume, high, low, last) = otc_orderbook.get_24h_stats(pair_id);
+
+// Get last trade
+let (price, timestamp) = otc_orderbook.get_last_trade(pair_id);
+
+// Get historical snapshots
+let count = otc_orderbook.get_snapshot_count(pair_id);
+let (price, time) = otc_orderbook.get_price_snapshot(pair_id, index);
+```
+
+### Privacy System Analytics
+
+```cairo
+// Stealth Registry stats
+let worker_count = stealth_registry.get_registered_worker_count();
+let announcement_count = stealth_registry.get_announcement_count();
+
+// Check if payment claimed
+let is_claimed = stealth_registry.is_claimed(announcement_index);
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"Oracle unhealthy"** - Check oracle configuration, ensure fallback prices are set
+2. **"Timelock not expired"** - Wait for upgrade timelock period to pass
+3. **"Worker not registered"** - Worker needs to call `register_meta_address` first
+4. **"Invalid spending proof"** - Verify worker is using correct viewing/spending keys
+
+### Emergency Actions
+
+```cairo
+// Pause contracts if needed
+payment_router.pause();
+otc_orderbook.pause();
+stealth_registry.pause();
+
+// Resume when issue resolved
+payment_router.unpause();
+```
+
+### Support
+
+- GitHub Issues: https://github.com/Bitsage-Network/bitsage-network/issues
+- Documentation: https://docs.bitsage.network

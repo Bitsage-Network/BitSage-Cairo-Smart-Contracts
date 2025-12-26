@@ -133,6 +133,43 @@ pub trait IStealthRegistry<TContractState> {
     fn get_registered_worker_count(self: @TContractState) -> u256;
 
     // =========================================================================
+    // Time-Based Indexing (Efficient Scanning)
+    // =========================================================================
+
+    /// Get announcements by time range
+    /// Returns announcement indices in the given time window
+    /// Uses binary search for O(log n) lookup
+    fn get_announcements_by_time(
+        self: @TContractState,
+        start_timestamp: u64,
+        end_timestamp: u64,
+        max_results: u32
+    ) -> Array<u256>;
+
+    /// Get the announcement index for a given timestamp (binary search)
+    /// Returns the first announcement at or after the timestamp
+    fn get_announcement_at_time(
+        self: @TContractState,
+        timestamp: u64
+    ) -> u256;
+
+    /// Get announcements by view tag (fast filter for workers)
+    fn get_announcements_by_view_tag(
+        self: @TContractState,
+        view_tag: u8,
+        start_index: u256,
+        max_results: u32
+    ) -> Array<u256>;
+
+    /// Get time range boundaries for efficient scanning
+    /// Returns (first_timestamp, last_timestamp, count)
+    fn get_time_range_info(self: @TContractState) -> (u64, u64, u256);
+
+    /// Get hourly announcement counts for analytics
+    /// Returns count of announcements in the given hour (0-23)
+    fn get_hourly_count(self: @TContractState, hour_index: u256) -> u256;
+
+    // =========================================================================
     // Admin Functions
     // =========================================================================
 
@@ -197,6 +234,28 @@ mod StealthRegistry {
         // Statistics
         total_volume: u256,
         total_claimed: u256,
+
+        // =====================================================================
+        // Time-Based Index (for efficient scanning)
+        // =====================================================================
+
+        // Announcement timestamps for binary search (sorted by index)
+        // Since announcements are appended in order, timestamps are naturally sorted
+        announcement_timestamps: Map<u256, u64>,  // index -> timestamp
+
+        // View tag index for fast filtering
+        // Maps (view_tag, position) -> announcement_index
+        view_tag_index: Map<(u8, u256), u256>,
+        view_tag_count: Map<u8, u256>,  // view_tag -> count
+
+        // Hourly index for time-bucketed queries
+        // Maps hour_index -> count of announcements in that hour
+        // hour_index = timestamp / 3600
+        hourly_counts: Map<u256, u256>,
+
+        // First and last timestamps for range info
+        first_announcement_time: u64,
+        last_announcement_time: u64,
     }
 
     // =========================================================================
@@ -458,6 +517,31 @@ mod StealthRegistry {
             self.stealth_to_announcement.write(stealth_address, announcement_index);
             self.announcement_count.write(announcement_index + 1);
 
+            // =========================================================
+            // Update Time-Based Index
+            // =========================================================
+
+            // Store timestamp for binary search
+            self.announcement_timestamps.write(announcement_index, now);
+
+            // Update first/last timestamps
+            if announcement_index == 0 {
+                self.first_announcement_time.write(now);
+            }
+            self.last_announcement_time.write(now);
+
+            // Update view tag index
+            let tag_count = self.view_tag_count.read(view_tag);
+            self.view_tag_index.write((view_tag, tag_count), announcement_index);
+            self.view_tag_count.write(view_tag, tag_count + 1);
+
+            // Update hourly index
+            let hour_index: u256 = (now / 3600).into();
+            let hourly = self.hourly_counts.read(hour_index);
+            self.hourly_counts.write(hour_index, hourly + 1);
+
+            // =========================================================
+
             // Update statistics
             let total = self.total_volume.read();
             self.total_volume.write(total + amount);
@@ -609,6 +693,100 @@ mod StealthRegistry {
         }
 
         // =====================================================================
+        // Time-Based Indexing (Efficient Scanning)
+        // =====================================================================
+
+        /// Get announcements in a time range using binary search
+        fn get_announcements_by_time(
+            self: @ContractState,
+            start_timestamp: u64,
+            end_timestamp: u64,
+            max_results: u32
+        ) -> Array<u256> {
+            let mut results: Array<u256> = array![];
+            let total = self.announcement_count.read();
+
+            if total == 0 {
+                return results;
+            }
+
+            // Binary search for start position
+            let start_idx = self._binary_search_timestamp(start_timestamp);
+
+            // Collect announcements in range
+            let mut i = start_idx;
+            let mut count: u32 = 0;
+
+            loop {
+                if i >= total || count >= max_results {
+                    break;
+                }
+
+                let ts = self.announcement_timestamps.read(i);
+                if ts > end_timestamp {
+                    break;
+                }
+
+                if ts >= start_timestamp {
+                    results.append(i);
+                    count += 1;
+                }
+
+                i += 1;
+            };
+
+            results
+        }
+
+        /// Get announcement index at or after a timestamp (binary search)
+        fn get_announcement_at_time(
+            self: @ContractState,
+            timestamp: u64
+        ) -> u256 {
+            self._binary_search_timestamp(timestamp)
+        }
+
+        /// Get announcements by view tag (fast filter for workers)
+        fn get_announcements_by_view_tag(
+            self: @ContractState,
+            view_tag: u8,
+            start_index: u256,
+            max_results: u32
+        ) -> Array<u256> {
+            let mut results: Array<u256> = array![];
+            let total_for_tag = self.view_tag_count.read(view_tag);
+
+            let mut i = start_index;
+            let mut count: u32 = 0;
+
+            loop {
+                if i >= total_for_tag || count >= max_results {
+                    break;
+                }
+
+                let announcement_idx = self.view_tag_index.read((view_tag, i));
+                results.append(announcement_idx);
+                count += 1;
+                i += 1;
+            };
+
+            results
+        }
+
+        /// Get time range info for scanning optimization
+        fn get_time_range_info(self: @ContractState) -> (u64, u64, u256) {
+            let first = self.first_announcement_time.read();
+            let last = self.last_announcement_time.read();
+            let count = self.announcement_count.read();
+            (first, last, count)
+        }
+
+        /// Get hourly announcement count for analytics
+        fn get_hourly_count(self: @ContractState, hour_index: u256) -> u256 {
+            self.hourly_counts.read(hour_index)
+        }
+
+        // =====================================================================
         // Admin Functions
         // =====================================================================
 
@@ -651,6 +829,78 @@ mod StealthRegistry {
 
         fn _require_not_paused(self: @ContractState) {
             assert!(!self.paused.read(), "Registry paused");
+        }
+
+        /// Binary search for the first announcement at or after a timestamp
+        /// Returns the index of the first announcement with timestamp >= target
+        /// If no such announcement exists, returns the total count
+        fn _binary_search_timestamp(self: @ContractState, target: u64) -> u256 {
+            let total = self.announcement_count.read();
+
+            if total == 0 {
+                return 0;
+            }
+
+            // Check if target is before first announcement
+            let first_ts = self.announcement_timestamps.read(0);
+            if target <= first_ts {
+                return 0;
+            }
+
+            // Check if target is after last announcement
+            let last_ts = self.announcement_timestamps.read(total - 1);
+            if target > last_ts {
+                return total;
+            }
+
+            // Binary search
+            let mut low: u256 = 0;
+            let mut high: u256 = total;
+
+            loop {
+                if low >= high {
+                    break;
+                }
+
+                let mid = (low + high) / 2;
+                let mid_ts = self.announcement_timestamps.read(mid);
+
+                if mid_ts < target {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            };
+
+            low
+        }
+
+        /// Binary search for view tag filtering within a time range
+        fn _find_view_tag_in_range(
+            self: @ContractState,
+            view_tag: u8,
+            start_idx: u256,
+            end_idx: u256
+        ) -> Array<u256> {
+            let mut results: Array<u256> = array![];
+            let total_for_tag = self.view_tag_count.read(view_tag);
+
+            // Iterate through view tag index and filter by range
+            let mut i: u256 = 0;
+            loop {
+                if i >= total_for_tag {
+                    break;
+                }
+
+                let announcement_idx = self.view_tag_index.read((view_tag, i));
+                if announcement_idx >= start_idx && announcement_idx < end_idx {
+                    results.append(announcement_idx);
+                }
+
+                i += 1;
+            };
+
+            results
         }
     }
 }
