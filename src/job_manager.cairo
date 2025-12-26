@@ -20,14 +20,15 @@
 //! and Payment systems to provide the core job orchestration functionality.
 
 // Core Starknet imports
-use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+use starknet::{ContractAddress, ClassHash, get_caller_address, get_block_timestamp};
 use core::num::traits::Zero;
 
 // Storage trait imports - CRITICAL for Map operations
 use starknet::storage::{
-    StoragePointerReadAccess, StoragePointerWriteAccess, 
+    StoragePointerReadAccess, StoragePointerWriteAccess,
     StorageMapReadAccess, StorageMapWriteAccess, Map
 };
+use starknet::SyscallResultTrait;
 
 // Interface imports
 use sage_contracts::interfaces::job_manager::{
@@ -57,7 +58,7 @@ mod JobManager {
     use super::{
         IJobManager, JobId, ModelId, WorkerId, JobType, JobSpec, JobResult,
         VerificationMethod, ModelRequirements, JobState, JobDetails, WorkerStats,
-        ProveJobData, ContractAddress, get_caller_address, get_block_timestamp,
+        ProveJobData, ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map,
         IERC20Dispatcher, IERC20DispatcherTrait, Zero,
@@ -66,8 +67,14 @@ mod JobManager {
         // PHASE 3: Proof-Gated Payment integration
         IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait,
         // Shared constants
-        SECONDS_PER_HOUR, SECONDS_PER_DAY, SCALE, BPS_DENOMINATOR
+        SECONDS_PER_HOUR, SECONDS_PER_DAY, SCALE, BPS_DENOMINATOR,
+        // Upgradability
+        SyscallResultTrait
     };
+    use starknet::get_contract_address;
+
+    // Upgrade delay constant
+    const UPGRADE_DELAY: u64 = 172800; // 2 days timelock for upgrades
 
     #[event]
     #[derive(Drop, starknet::Event)]
@@ -88,6 +95,10 @@ mod JobManager {
         CDCPoolNotificationFailed: CDCPoolNotificationFailed,
         // Phase 3: Proof-Gated Payment events
         JobPaymentRegistered: JobPaymentRegistered,
+        // Upgradability events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -203,6 +214,31 @@ mod JobManager {
         timestamp: u64
     }
 
+    // Upgradability events
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_by: ContractAddress,
+        execute_after: u64,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        old_class_hash: ClassHash,
+        new_class_hash: ClassHash,
+        executed_by: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        cancelled_class_hash: ClassHash,
+        cancelled_by: ContractAddress,
+        timestamp: u64,
+    }
+
     #[storage]
     struct Storage {
         // Configuration parameters
@@ -300,6 +336,11 @@ mod JobManager {
 
         // Phase 2.1: Reentrancy guard for cross-contract calls
         _reentrancy_guard: bool,
+
+        // === UPGRADABILITY ===
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[constructor]
@@ -332,6 +373,9 @@ mod JobManager {
         self.next_model_id.write(1);
         self.contract_paused.write(false);
         self._reentrancy_guard.write(false);
+
+        // Initialize upgrade delay
+        self.upgrade_delay.write(UPGRADE_DELAY);
     }
 
     #[abi(embed_v0)]
@@ -1137,6 +1181,103 @@ mod JobManager {
                 _ => false,
             }
         }
+
+        // =========================================================================
+        // Upgradability Functions
+        // =========================================================================
+
+        /// Schedule a contract upgrade with timelock delay
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_admin();
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            // Ensure no upgrade is already pending
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert!(pending == zero_hash, "Upgrade already pending");
+
+            // Schedule the upgrade
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_by: get_caller_address(),
+                execute_after,
+                timestamp: now,
+            });
+        }
+
+        /// Execute a scheduled upgrade after timelock has passed
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_admin();
+
+            let now = get_block_timestamp();
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+
+            // Verify there's a pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert!(pending != zero_hash, "No pending upgrade");
+
+            // Verify timelock has passed
+            assert!(now >= scheduled_at + delay, "Timelock not expired");
+
+            // Get current class hash for event
+            let old_class_hash = starknet::syscalls::get_class_hash_at_syscall(
+                get_contract_address()
+            ).unwrap_syscall();
+
+            // Clear pending upgrade state
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Emit event before upgrade
+            self.emit(UpgradeExecuted {
+                old_class_hash,
+                new_class_hash: pending,
+                executed_by: get_caller_address(),
+                timestamp: now,
+            });
+
+            // Execute the upgrade using replace_class syscall
+            starknet::syscalls::replace_class_syscall(pending).unwrap_syscall();
+        }
+
+        /// Cancel a scheduled upgrade
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_admin();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+
+            // Verify there's a pending upgrade to cancel
+            assert!(pending != zero_hash, "No pending upgrade");
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_by: get_caller_address(),
+                timestamp: get_block_timestamp(),
+            });
+        }
+
+        /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64, u64) {
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let execute_after = if scheduled_at > 0 { scheduled_at + delay } else { 0 };
+
+            (pending, scheduled_at, execute_after, delay)
+        }
     }
 
     // Internal helper functions
@@ -1212,6 +1353,10 @@ mod JobManager {
 
         // PHASE 2: Removed duplicate internal functions (assign_job_to_worker, submit_job_result,
         // get_job_state, get_worker_stats, register_worker) - now using only external impl versions
+
+        fn _only_admin(self: @ContractState) {
+            assert!(get_caller_address() == self.admin.read(), "JM: admin only");
+        }
 
         fn _check_not_paused(self: @ContractState) {
             assert!(!self.contract_paused.read(), "JM: contract paused");

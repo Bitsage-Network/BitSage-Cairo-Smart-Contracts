@@ -5,7 +5,7 @@
 //! 1. AI/ML training & inference (market-based $/GPU-hour)
 //! 2. ZK proof generation for Starknet (deterministic $/batch)
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 use core::array::Array;
 
 // Enhanced Job ID system supporting multiple job types
@@ -286,4 +286,20 @@ pub trait IJobManager<TContractState> {
 
     /// Check if a job can be cancelled
     fn can_cancel_job(self: @TContractState, job_id: JobId) -> bool;
+
+    // =========================================================================
+    // Upgradability Functions
+    // =========================================================================
+
+    /// Schedule a contract upgrade with timelock delay
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// Execute a scheduled upgrade after timelock has passed
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a scheduled upgrade
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64, u64);
 } 
