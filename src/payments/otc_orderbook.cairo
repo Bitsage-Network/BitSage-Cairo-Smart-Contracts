@@ -206,6 +206,25 @@ pub trait IOTCOrderbook<TContractState> {
     fn get_stats(self: @TContractState) -> (u256, u256, u256, u256);  // total_orders, total_trades, total_volume_sage, total_volume_usd
 
     // =========================================================================
+    // Price Analytics Functions
+    // =========================================================================
+
+    /// Get Time-Weighted Average Price for a pair
+    fn get_twap(self: @TContractState, pair_id: u8) -> u256;
+
+    /// Get 24h stats: (volume, high, low, last_price)
+    fn get_24h_stats(self: @TContractState, pair_id: u8) -> (u256, u256, u256, u256);
+
+    /// Get last trade: (price, timestamp)
+    fn get_last_trade(self: @TContractState, pair_id: u8) -> (u256, u64);
+
+    /// Get price snapshot at index: (price, timestamp)
+    fn get_price_snapshot(self: @TContractState, pair_id: u8, index: u32) -> (u256, u64);
+
+    /// Get count of price snapshots
+    fn get_snapshot_count(self: @TContractState, pair_id: u8) -> u32;
+
+    // =========================================================================
     // Admin Functions
     // =========================================================================
 
@@ -290,6 +309,27 @@ mod OTCOrderbook {
 
         // Collected fees
         collected_fees: Map<ContractAddress, u256>,  // token -> amount
+
+        // === TWAP & PRICE ANALYTICS ===
+        // Last trade price per pair
+        last_trade_price: Map<u8, u256>,
+        last_trade_time: Map<u8, u64>,
+
+        // TWAP tracking (Time-Weighted Average Price)
+        // Cumulative price*time for TWAP calculation
+        twap_cumulative: Map<u8, u256>,
+        twap_last_update: Map<u8, u64>,
+        twap_last_price: Map<u8, u256>,
+
+        // 24h rolling window tracking
+        volume_24h: Map<u8, u256>,             // pair_id -> 24h volume
+        volume_24h_reset_time: Map<u8, u64>,   // pair_id -> last reset timestamp
+        high_24h: Map<u8, u256>,               // pair_id -> 24h high price
+        low_24h: Map<u8, u256>,                // pair_id -> 24h low price
+
+        // Price history snapshots (hourly)
+        price_snapshot_count: Map<u8, u32>,                    // pair_id -> count
+        price_snapshots: Map<(u8, u32), (u256, u64)>,          // (pair_id, index) -> (price, timestamp)
     }
 
     #[event]
@@ -787,6 +827,67 @@ mod OTCOrderbook {
             self._only_owner();
             self.referral_system.write(referral_system);
         }
+
+        // =========================================================================
+        // Price Analytics View Functions
+        // =========================================================================
+
+        /// Get TWAP for a pair over the observation period
+        fn get_twap(self: @ContractState, pair_id: u8) -> u256 {
+            let cumulative = self.twap_cumulative.read(pair_id);
+            let last_update = self.twap_last_update.read(pair_id);
+            let last_price = self.twap_last_price.read(pair_id);
+
+            if last_update == 0 || last_price == 0 {
+                return 0;
+            }
+
+            let current_time = get_block_timestamp();
+            let time_elapsed: u256 = (current_time - last_update).into();
+
+            // Add current period contribution
+            let total_cumulative = cumulative + (last_price * time_elapsed);
+
+            // Calculate average (use time since first observation)
+            let first_update = self.volume_24h_reset_time.read(pair_id);
+            if first_update == 0 {
+                return last_price;
+            }
+
+            let total_time: u256 = (current_time - first_update).into();
+            if total_time == 0 {
+                return last_price;
+            }
+
+            total_cumulative / total_time
+        }
+
+        /// Get 24h stats for a pair: (volume, high, low, last_price)
+        fn get_24h_stats(self: @ContractState, pair_id: u8) -> (u256, u256, u256, u256) {
+            let volume = self.volume_24h.read(pair_id);
+            let high = self.high_24h.read(pair_id);
+            let low = self.low_24h.read(pair_id);
+            let last_price = self.last_trade_price.read(pair_id);
+
+            (volume, high, low, last_price)
+        }
+
+        /// Get last trade info: (price, timestamp)
+        fn get_last_trade(self: @ContractState, pair_id: u8) -> (u256, u64) {
+            let price = self.last_trade_price.read(pair_id);
+            let time = self.last_trade_time.read(pair_id);
+            (price, time)
+        }
+
+        /// Get price snapshot at index: (price, timestamp)
+        fn get_price_snapshot(self: @ContractState, pair_id: u8, index: u32) -> (u256, u64) {
+            self.price_snapshots.read((pair_id, index))
+        }
+
+        /// Get count of price snapshots
+        fn get_snapshot_count(self: @ContractState, pair_id: u8) -> u32 {
+            self.price_snapshot_count.read(pair_id)
+        }
     }
 
     #[generate_trait]
@@ -1192,6 +1293,9 @@ mod OTCOrderbook {
             let total_quote = self.total_volume_quote.read(taker_order.pair_id) + quote_amount;
             self.total_volume_quote.write(taker_order.pair_id, total_quote);
 
+            // Update TWAP and price analytics
+            self._update_price_analytics(taker_order.pair_id, match_price, fill_amount);
+
             // Emit events
             self.emit(TradeExecuted {
                 trade_id,
@@ -1243,6 +1347,69 @@ mod OTCOrderbook {
             // Call referral system to record trade and distribute rewards
             let referral = IReferralSystemDispatcher { contract_address: referral_addr };
             referral.record_trade(trader, volume_usd, fee_amount, fee_token);
+        }
+
+        /// Update TWAP and price analytics after each trade
+        fn _update_price_analytics(ref self: ContractState, pair_id: u8, price: u256, volume: u256) {
+            let current_time = get_block_timestamp();
+
+            // Update last trade price
+            self.last_trade_price.write(pair_id, price);
+            self.last_trade_time.write(pair_id, current_time);
+
+            // Update TWAP cumulative
+            let last_update = self.twap_last_update.read(pair_id);
+            let last_price = self.twap_last_price.read(pair_id);
+
+            if last_update > 0 && last_price > 0 {
+                let time_elapsed: u256 = (current_time - last_update).into();
+                let cumulative = self.twap_cumulative.read(pair_id);
+                // Add weighted price contribution
+                self.twap_cumulative.write(pair_id, cumulative + (last_price * time_elapsed));
+            }
+
+            self.twap_last_update.write(pair_id, current_time);
+            self.twap_last_price.write(pair_id, price);
+
+            // Update 24h volume (reset if window expired)
+            let reset_time = self.volume_24h_reset_time.read(pair_id);
+            let seconds_24h: u64 = 86400;
+
+            if current_time >= reset_time + seconds_24h {
+                // Reset 24h stats
+                self.volume_24h.write(pair_id, volume);
+                self.volume_24h_reset_time.write(pair_id, current_time);
+                self.high_24h.write(pair_id, price);
+                self.low_24h.write(pair_id, price);
+            } else {
+                // Update 24h stats
+                let vol = self.volume_24h.read(pair_id) + volume;
+                self.volume_24h.write(pair_id, vol);
+
+                let high = self.high_24h.read(pair_id);
+                if price > high || high == 0 {
+                    self.high_24h.write(pair_id, price);
+                }
+
+                let low = self.low_24h.read(pair_id);
+                if price < low || low == 0 {
+                    self.low_24h.write(pair_id, price);
+                }
+            }
+
+            // Record hourly price snapshot (every hour)
+            let last_snapshot_count = self.price_snapshot_count.read(pair_id);
+            let should_snapshot = if last_snapshot_count == 0 {
+                true
+            } else {
+                let (_, last_snapshot_time) = self.price_snapshots.read((pair_id, last_snapshot_count - 1));
+                current_time >= last_snapshot_time + 3600 // 1 hour
+            };
+
+            if should_snapshot {
+                self.price_snapshots.write((pair_id, last_snapshot_count), (price, current_time));
+                self.price_snapshot_count.write(pair_id, last_snapshot_count + 1);
+            }
         }
     }
 }
