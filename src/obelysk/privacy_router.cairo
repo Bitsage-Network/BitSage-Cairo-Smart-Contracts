@@ -125,6 +125,27 @@ pub trait IPrivacyRouter<TContractState> {
 
     /// Admin: Pause/unpause for emergencies
     fn set_paused(ref self: TContractState, paused: bool);
+
+    // =========================================================================
+    // Stealth Payment Integration
+    // =========================================================================
+
+    /// Admin: Set stealth registry address for address masking
+    fn set_stealth_registry(ref self: TContractState, registry: ContractAddress);
+
+    /// Get stealth registry address
+    fn get_stealth_registry(self: @TContractState) -> ContractAddress;
+
+    /// Send worker payment via stealth address
+    /// Combines amount privacy (ElGamal) with address privacy (stealth)
+    fn send_stealth_worker_payment(
+        ref self: TContractState,
+        job_id: u256,
+        worker: ContractAddress,
+        sage_amount: u256,
+        ephemeral_secret: felt252,
+        encryption_randomness: felt252
+    );
 }
 
 #[starknet::contract]
@@ -140,6 +161,10 @@ mod PrivacyRouter {
         get_c1, get_c2, get_commitment,
         // Production Sigma protocol verification
         ec_add, ec_mul, ec_sub, generator, pedersen_commit,
+    };
+    // Stealth payment integration
+    use sage_contracts::obelysk::stealth_registry::{
+        IStealthRegistryDispatcher, IStealthRegistryDispatcherTrait
     };
     use core::poseidon::poseidon_hash_span;
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
@@ -185,6 +210,9 @@ mod PrivacyRouter {
 
         // Security: Reentrancy guard
         reentrancy_locked: bool,
+
+        // Stealth payment integration
+        stealth_registry: ContractAddress,
     }
 
     #[event]
@@ -197,6 +225,7 @@ mod PrivacyRouter {
         WorkerPaymentReceived: WorkerPaymentReceived,
         WorkerPaymentClaimed: WorkerPaymentClaimed,
         EpochAdvanced: EpochAdvanced,
+        StealthWorkerPaymentSent: StealthWorkerPaymentSent,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -258,6 +287,17 @@ mod PrivacyRouter {
     struct EpochAdvanced {
         old_epoch: u64,
         new_epoch: u64,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct StealthWorkerPaymentSent {
+        #[key]
+        job_id: u256,
+        #[key]
+        worker: ContractAddress,
+        announcement_index: u256,
+        sage_amount: u256,
         timestamp: u64,
     }
 
@@ -639,6 +679,69 @@ mod PrivacyRouter {
         fn set_paused(ref self: ContractState, paused: bool) {
             self._only_owner();
             self.paused.write(paused);
+        }
+
+        // =====================================================================
+        // Stealth Payment Integration
+        // =====================================================================
+
+        fn set_stealth_registry(ref self: ContractState, registry: ContractAddress) {
+            self._only_owner();
+            self.stealth_registry.write(registry);
+        }
+
+        fn get_stealth_registry(self: @ContractState) -> ContractAddress {
+            self.stealth_registry.read()
+        }
+
+        fn send_stealth_worker_payment(
+            ref self: ContractState,
+            job_id: u256,
+            worker: ContractAddress,
+            sage_amount: u256,
+            ephemeral_secret: felt252,
+            encryption_randomness: felt252
+        ) {
+            self._require_not_paused();
+            self._reentrancy_guard_start();
+
+            // Verify caller is authorized (payment router or owner)
+            let caller = get_caller_address();
+            assert!(
+                caller == self.payment_router.read() || caller == self.owner.read(),
+                "Not authorized"
+            );
+
+            // Get stealth registry
+            let registry_addr = self.stealth_registry.read();
+            assert!(!registry_addr.is_zero(), "Stealth registry not set");
+
+            // Transfer SAGE from caller to this contract first
+            let sage = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            sage.transfer_from(caller, get_contract_address(), sage_amount);
+
+            // Approve stealth registry to spend
+            sage.approve(registry_addr, sage_amount);
+
+            // Send via stealth registry
+            let registry = IStealthRegistryDispatcher { contract_address: registry_addr };
+            let announcement_index = registry.send_stealth_payment(
+                worker,
+                sage_amount,
+                ephemeral_secret,
+                encryption_randomness,
+                job_id
+            );
+
+            self.emit(StealthWorkerPaymentSent {
+                job_id,
+                worker,
+                announcement_index,
+                sage_amount,
+                timestamp: get_block_timestamp(),
+            });
+
+            self._reentrancy_guard_end();
         }
     }
 

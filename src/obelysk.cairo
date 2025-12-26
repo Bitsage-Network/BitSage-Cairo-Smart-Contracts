@@ -11,3 +11,8 @@ pub mod tee_attestation;
 pub mod elgamal;
 pub mod privacy_router;
 pub mod worker_privacy;
+
+// Stealth Address System (EIP-5564 inspired)
+// Provides unlinkable payment addresses for workers
+pub mod stealth_payments;
+pub mod stealth_registry;
