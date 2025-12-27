@@ -20,15 +20,14 @@
 //! and Payment systems to provide the core job orchestration functionality.
 
 // Core Starknet imports
-use starknet::{ContractAddress, ClassHash, get_caller_address, get_block_timestamp};
+use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
 use core::num::traits::Zero;
 
 // Storage trait imports - CRITICAL for Map operations
 use starknet::storage::{
-    StoragePointerReadAccess, StoragePointerWriteAccess,
+    StoragePointerReadAccess, StoragePointerWriteAccess, 
     StorageMapReadAccess, StorageMapWriteAccess, Map
 };
-use starknet::SyscallResultTrait;
 
 // Interface imports
 use sage_contracts::interfaces::job_manager::{
@@ -48,33 +47,20 @@ use sage_contracts::payments::proof_gated_payment::{
     IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait
 };
 
-// Shared constants
-use sage_contracts::utils::constants::{
-    SECONDS_PER_HOUR, SECONDS_PER_DAY, SCALE, BPS_DENOMINATOR
-};
-
 #[starknet::contract]
 mod JobManager {
     use super::{
         IJobManager, JobId, ModelId, WorkerId, JobType, JobSpec, JobResult,
         VerificationMethod, ModelRequirements, JobState, JobDetails, WorkerStats,
-        ProveJobData, ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        ProveJobData, ContractAddress, get_caller_address, get_block_timestamp,
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map,
         IERC20Dispatcher, IERC20DispatcherTrait, Zero,
         // PHASE 2: CDC Pool notification hooks
         ICDCPoolDispatcher, ICDCPoolDispatcherTrait,
         // PHASE 3: Proof-Gated Payment integration
-        IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait,
-        // Shared constants
-        SECONDS_PER_HOUR, SECONDS_PER_DAY, SCALE, BPS_DENOMINATOR,
-        // Upgradability
-        SyscallResultTrait
+        IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait
     };
-    use starknet::get_contract_address;
-
-    // Upgrade delay constant
-    const UPGRADE_DELAY: u64 = 172800; // 2 days timelock for upgrades
 
     #[event]
     #[derive(Drop, starknet::Event)]
@@ -95,10 +81,6 @@ mod JobManager {
         CDCPoolNotificationFailed: CDCPoolNotificationFailed,
         // Phase 3: Proof-Gated Payment events
         JobPaymentRegistered: JobPaymentRegistered,
-        // Upgradability events
-        UpgradeScheduled: UpgradeScheduled,
-        UpgradeExecuted: UpgradeExecuted,
-        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -214,31 +196,6 @@ mod JobManager {
         timestamp: u64
     }
 
-    // Upgradability events
-    #[derive(Drop, starknet::Event)]
-    struct UpgradeScheduled {
-        #[key]
-        new_class_hash: ClassHash,
-        scheduled_by: ContractAddress,
-        execute_after: u64,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct UpgradeExecuted {
-        old_class_hash: ClassHash,
-        new_class_hash: ClassHash,
-        executed_by: ContractAddress,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct UpgradeCancelled {
-        cancelled_class_hash: ClassHash,
-        cancelled_by: ContractAddress,
-        timestamp: u64,
-    }
-
     #[storage]
     struct Storage {
         // Configuration parameters
@@ -336,11 +293,6 @@ mod JobManager {
 
         // Phase 2.1: Reentrancy guard for cross-contract calls
         _reentrancy_guard: bool,
-
-        // === UPGRADABILITY ===
-        pending_upgrade: ClassHash,
-        upgrade_scheduled_at: u64,
-        upgrade_delay: u64,
     }
 
     #[constructor]
@@ -364,18 +316,15 @@ mod JobManager {
 
         // Set default configuration
         self.platform_fee_bps.write(250); // 2.5%
-        self.min_job_payment.write(SCALE); // 1 SAGE token
-        self.max_job_duration.write(SECONDS_PER_DAY); // 24 hours
-        self.dispute_fee.write(10 * SCALE); // 10 SAGE tokens
+        self.min_job_payment.write(1000000000000000000); // 1 SAGE token
+        self.max_job_duration.write(86400); // 24 hours
+        self.dispute_fee.write(10000000000000000000); // 10 SAGE tokens
         self.min_allocation_score.write(100);
 
         self.next_job_id.write(1);
         self.next_model_id.write(1);
         self.contract_paused.write(false);
         self._reentrancy_guard.write(false);
-
-        // Initialize upgrade delay
-        self.upgrade_delay.write(UPGRADE_DELAY);
     }
 
     #[abi(embed_v0)]
@@ -395,11 +344,11 @@ mod JobManager {
             assert!(!client.is_zero(), "Invalid client address");
 
             // Validate payment
-            assert!(payment >= self.min_job_payment.read(), "JM: payment too low");
+            assert!(payment >= self.min_job_payment.read(), "Payment too low");
 
             // Validate deadline (must be in future but not too far - max 30 days)
-            let max_deadline_offset: u64 = 30 * SECONDS_PER_DAY; // 30 days
-            assert!(job_spec.sla_deadline > current_time, "JM: deadline in past");
+            let max_deadline_offset: u64 = 30 * 86400; // 30 days in seconds
+            assert!(job_spec.sla_deadline > current_time, "Deadline must be in future");
             assert!(
                 job_spec.sla_deadline <= current_time + max_deadline_offset,
                 "Deadline too far in future"
@@ -479,7 +428,7 @@ mod JobManager {
                 expected_output_format: 'proof_format',
                 verification_method: VerificationMethod::ZeroKnowledgeProof,
                 max_reward: payment,
-                sla_deadline: get_block_timestamp() + SECONDS_PER_HOUR, // 1 hour deadline
+                sla_deadline: get_block_timestamp() + 3600, // 1 hour deadline
                 compute_requirements: array![], // Empty array for now
                 metadata: array![] // Empty array for now
             };
@@ -496,7 +445,7 @@ mod JobManager {
             self._check_not_paused();
 
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(caller == self.admin.read(), "Not authorized");
 
             // Cairo 2.12.0: Combined let-else for type conversion and state validation
             let Some(job_key) = job_id.value.try_into() else {
@@ -661,7 +610,7 @@ mod JobManager {
                 assert!(self.platform_fee_bps.read() <= 10000, "Invalid platform fee");
 
                 // Calculate platform fee
-                let platform_fee = (payment_amount * self.platform_fee_bps.read().into()) / BPS_DENOMINATOR;
+                let platform_fee = (payment_amount * self.platform_fee_bps.read().into()) / 10000;
                 let worker_payment = payment_amount - platform_fee;
 
                 // SECURITY FIX: Update state BEFORE external calls (reentrancy protection)
@@ -724,6 +673,12 @@ mod JobManager {
         fn get_job_details(self: @ContractState, job_id: JobId) -> JobDetails {
             let job_key: felt252 = job_id.value.try_into().unwrap();
             let job_type = self.job_types.read(job_key);
+            let _job_model_id = self.job_model_ids.read(job_key);
+            let _job_input_hash = self.job_input_hashes.read(job_key);
+            let _job_output_format = self.job_output_formats.read(job_key);
+            let _job_verification_method = self.job_verification_methods.read(job_key);
+            let _job_max_reward = self.job_max_rewards.read(job_key);
+            let _job_deadline = self.job_deadlines.read(job_key);
             let state = self.job_states.read(job_key);
             let client = self.job_clients.read(job_key);
             let worker = self.job_workers.read(job_key);
@@ -761,7 +716,7 @@ mod JobManager {
                 WorkerStats {
                     total_jobs_completed: 0,
                     success_rate: 100, // Default 100% for new workers
-                    average_completion_time: SECONDS_PER_HOUR, // Default 1 hour
+                    average_completion_time: 3600, // Default 1 hour
                     reputation_score: 1000, // Default reputation
                     total_earnings: 0
                 }
@@ -772,7 +727,7 @@ mod JobManager {
 
         fn update_config(ref self: ContractState, config_key: felt252, config_value: felt252) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(caller == self.admin.read(), "Not authorized");
 
             // Phase 2.1: Track old value for event emission
             let old_value: felt252 = if config_key == 'platform_fee_bps' {
@@ -822,8 +777,8 @@ mod JobManager {
 
         fn pause(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
-            assert!(!self.contract_paused.read(), "JM: already paused");
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(!self.contract_paused.read(), "Already paused");
 
             self.contract_paused.write(true);
 
@@ -836,8 +791,8 @@ mod JobManager {
 
         fn unpause(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
-            assert!(self.contract_paused.read(), "JM: not paused");
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(self.contract_paused.read(), "Not paused");
 
             self.contract_paused.write(false);
 
@@ -850,7 +805,7 @@ mod JobManager {
 
         fn emergency_withdraw(ref self: ContractState, token: ContractAddress, amount: u256) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(caller == self.admin.read(), "Not authorized");
 
             // Phase 2.1: Validate inputs
             assert!(!token.is_zero(), "Invalid token address");
@@ -1013,7 +968,7 @@ mod JobManager {
             base_gas_cost: u256
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(caller == self.admin.read(), "Not authorized");
             
             let Some(model_key) = model_id.value.try_into() else {
                 panic!("Invalid model ID conversion");
@@ -1086,7 +1041,7 @@ mod JobManager {
         /// Admin: Set ProofGatedPayment contract address
         fn set_proof_gated_payment(ref self: ContractState, payment: ContractAddress) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "JM: admin only");
+            assert!(caller == self.admin.read(), "Not authorized");
             self.proof_gated_payment.write(payment);
         }
 
@@ -1104,179 +1059,6 @@ mod JobManager {
             };
 
             proof_payment.is_payment_ready(job_id.value)
-        }
-
-        // ========================================================================
-        // PHASE 4: Job Cancellation
-        // ========================================================================
-
-        /// Cancel an expired job - can be called by anyone (keeper-style)
-        fn cancel_expired_job(ref self: ContractState, job_id: JobId) -> bool {
-            self._check_not_paused();
-            self._start_nonreentrant();
-
-            let success = self._cancel_expired_job(job_id);
-
-            self._end_nonreentrant();
-            success
-        }
-
-        /// Client can cancel their own job if still queued
-        fn cancel_job(ref self: ContractState, job_id: JobId) {
-            self._check_not_paused();
-            self._start_nonreentrant();
-
-            let Some(job_key) = job_id.value.try_into() else {
-                panic!("Invalid job ID");
-            };
-
-            let client = self.job_clients.read(job_key);
-            let caller = get_caller_address();
-            assert!(caller == client, "JM: not job client");
-
-            let state = self.job_states.read(job_key);
-            assert!(state == JobState::Queued, "JM: can only cancel queued");
-
-            let payment = self.job_payments.read(job_key);
-
-            // Update state
-            self.job_states.write(job_key, JobState::Cancelled);
-            self.active_jobs.write(self.active_jobs.read() - 1);
-
-            // Refund client
-            let token = IERC20Dispatcher { contract_address: self.payment_token.read() };
-            let refund_success = token.transfer(client, payment);
-            assert!(refund_success, "Refund transfer failed");
-
-            self.emit(JobCancelled {
-                job_id: job_id.value,
-                client,
-                reason: 'client_cancelled',
-                refund_amount: payment
-            });
-
-            self._end_nonreentrant();
-        }
-
-        /// Check if a job can be cancelled
-        fn can_cancel_job(self: @ContractState, job_id: JobId) -> bool {
-            let Some(job_key) = job_id.value.try_into() else {
-                return false;
-            };
-
-            // Check if job exists (has a client)
-            let client = self.job_clients.read(job_key);
-            if client.is_zero() {
-                return false;
-            }
-
-            let state = self.job_states.read(job_key);
-            let deadline = self.job_deadlines.read(job_key);
-            let current_time = get_block_timestamp();
-
-            // Can cancel if: expired and (Queued or Processing), OR just Queued (client cancel)
-            match state {
-                JobState::Queued => true,
-                JobState::Processing => current_time > deadline,
-                _ => false,
-            }
-        }
-
-        // =========================================================================
-        // Upgradability Functions
-        // =========================================================================
-
-        /// Schedule a contract upgrade with timelock delay
-        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
-            self._only_admin();
-
-            let now = get_block_timestamp();
-            let delay = self.upgrade_delay.read();
-            let execute_after = now + delay;
-
-            // Ensure no upgrade is already pending
-            let pending = self.pending_upgrade.read();
-            let zero_hash: ClassHash = 0.try_into().unwrap();
-            assert!(pending == zero_hash, "Upgrade already pending");
-
-            // Schedule the upgrade
-            self.pending_upgrade.write(new_class_hash);
-            self.upgrade_scheduled_at.write(now);
-
-            self.emit(UpgradeScheduled {
-                new_class_hash,
-                scheduled_by: get_caller_address(),
-                execute_after,
-                timestamp: now,
-            });
-        }
-
-        /// Execute a scheduled upgrade after timelock has passed
-        fn execute_upgrade(ref self: ContractState) {
-            self._only_admin();
-
-            let now = get_block_timestamp();
-            let pending = self.pending_upgrade.read();
-            let scheduled_at = self.upgrade_scheduled_at.read();
-            let delay = self.upgrade_delay.read();
-
-            // Verify there's a pending upgrade
-            let zero_hash: ClassHash = 0.try_into().unwrap();
-            assert!(pending != zero_hash, "No pending upgrade");
-
-            // Verify timelock has passed
-            assert!(now >= scheduled_at + delay, "Timelock not expired");
-
-            // Get current class hash for event
-            let old_class_hash = starknet::syscalls::get_class_hash_at_syscall(
-                get_contract_address()
-            ).unwrap_syscall();
-
-            // Clear pending upgrade state
-            self.pending_upgrade.write(zero_hash);
-            self.upgrade_scheduled_at.write(0);
-
-            // Emit event before upgrade
-            self.emit(UpgradeExecuted {
-                old_class_hash,
-                new_class_hash: pending,
-                executed_by: get_caller_address(),
-                timestamp: now,
-            });
-
-            // Execute the upgrade using replace_class syscall
-            starknet::syscalls::replace_class_syscall(pending).unwrap_syscall();
-        }
-
-        /// Cancel a scheduled upgrade
-        fn cancel_upgrade(ref self: ContractState) {
-            self._only_admin();
-
-            let pending = self.pending_upgrade.read();
-            let zero_hash: ClassHash = 0.try_into().unwrap();
-
-            // Verify there's a pending upgrade to cancel
-            assert!(pending != zero_hash, "No pending upgrade");
-
-            // Clear pending upgrade
-            self.pending_upgrade.write(zero_hash);
-            self.upgrade_scheduled_at.write(0);
-
-            self.emit(UpgradeCancelled {
-                cancelled_class_hash: pending,
-                cancelled_by: get_caller_address(),
-                timestamp: get_block_timestamp(),
-            });
-        }
-
-        /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
-        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64, u64) {
-            let pending = self.pending_upgrade.read();
-            let scheduled_at = self.upgrade_scheduled_at.read();
-            let delay = self.upgrade_delay.read();
-            let execute_after = if scheduled_at > 0 { scheduled_at + delay } else { 0 };
-
-            (pending, scheduled_at, execute_after, delay)
         }
     }
 
@@ -1354,12 +1136,8 @@ mod JobManager {
         // PHASE 2: Removed duplicate internal functions (assign_job_to_worker, submit_job_result,
         // get_job_state, get_worker_stats, register_worker) - now using only external impl versions
 
-        fn _only_admin(self: @ContractState) {
-            assert!(get_caller_address() == self.admin.read(), "JM: admin only");
-        }
-
         fn _check_not_paused(self: @ContractState) {
-            assert!(!self.contract_paused.read(), "JM: contract paused");
+            assert!(!self.contract_paused.read(), "Contract is paused");
         }
 
         // ============================================================================
@@ -1368,7 +1146,7 @@ mod JobManager {
 
         /// Start non-reentrant section - call before external contract calls
         fn _start_nonreentrant(ref self: ContractState) {
-            assert!(!self._reentrancy_guard.read(), "JM: reentrancy");
+            assert!(!self._reentrancy_guard.read(), "Reentrant call detected");
             self._reentrancy_guard.write(true);
         }
 

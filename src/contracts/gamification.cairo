@@ -11,9 +11,6 @@ mod Gamification {
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use sage_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
-    use sage_contracts::contracts::achievement_nft::{
-        IAchievementNFTDispatcher, IAchievementNFTDispatcherTrait, AchievementMetadata
-    };
 
     // Worker levels
     #[derive(Drop, Serde, Copy, PartialEq)]
@@ -120,16 +117,6 @@ mod Gamification {
         AchievementUnlocked: AchievementUnlocked,
         ReputationChanged: ReputationChanged,
         LeaderboardUpdated: LeaderboardUpdated,
-        ContractAddressUpdated: ContractAddressUpdated,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct ContractAddressUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        contract_type: felt252, // 'job_manager', 'nft_contract', 'staking_contract'
-        old_address: ContractAddress,
-        new_address: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -218,11 +205,7 @@ mod Gamification {
         fn register_worker(ref self: ContractState, worker_id: felt252, worker_address: ContractAddress) {
             // Only job manager can register
             assert!(get_caller_address() == self.job_manager.read(), "Unauthorized");
-
-            // SECURITY: Input validation
-            assert!(worker_id != 0, "Worker ID cannot be zero");
-            assert!(!worker_address.is_zero(), "Worker address cannot be zero");
-
+            
             let profile = WorkerProfile {
                 worker_id,
                 xp: 0,
@@ -276,31 +259,21 @@ mod Gamification {
             if new_level > old_level {
                 profile.level = new_level;
                 self.worker_levels.write(worker_id, new_level);
-
-                // Level up reward - send to worker's address
+                
+                // Level up reward
                 let reward = self._get_level_reward(new_level);
                 if reward > 0 {
-                    // Look up worker's address from staking contract
-                    let staking_addr = self.staking_contract.read();
-                    if !staking_addr.is_zero() {
-                        let staking = IWorkerStakingDispatcher { contract_address: staking_addr };
-                        let worker_address = staking.get_worker_address(worker_id);
-
-                        if !worker_address.is_zero() {
-                            let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                            let transfer_success = token.transfer(worker_address, reward);
-                            assert!(transfer_success, "Level reward transfer failed");
-                        }
-                    }
+                    let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+                    token.transfer(starknet::get_contract_address(), reward); // TODO: Get worker address
                 }
-
+                
                 self.emit(LevelUp {
                     worker_id,
                     old_level,
                     new_level,
                     reward,
                 });
-
+                
                 // Check for Legend achievement
                 if new_level == 4 { // Legend
                     self._award_achievement(worker_id, 6); // LegendStatus
@@ -461,42 +434,18 @@ mod Gamification {
         /// Admin: Set job manager
         fn set_job_manager(ref self: ContractState, job_manager: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Not owner");
-            let old_address = self.job_manager.read();
             self.job_manager.write(job_manager);
-
-            self.emit(ContractAddressUpdated {
-                updated_by: get_caller_address(),
-                contract_type: 'job_manager',
-                old_address,
-                new_address: job_manager,
-            });
         }
 
         /// Admin: Set NFT contract
         fn set_nft_contract(ref self: ContractState, nft_contract: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Not owner");
-            let old_address = self.nft_contract.read();
             self.nft_contract.write(nft_contract);
-
-            self.emit(ContractAddressUpdated {
-                updated_by: get_caller_address(),
-                contract_type: 'nft_contract',
-                old_address,
-                new_address: nft_contract,
-            });
         }
 
         fn set_staking_contract(ref self: ContractState, staking_contract: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Not owner");
-            let old_address = self.staking_contract.read();
             self.staking_contract.write(staking_contract);
-
-            self.emit(ContractAddressUpdated {
-                updated_by: get_caller_address(),
-                contract_type: 'staking_contract',
-                old_address,
-                new_address: staking_contract,
-            });
         }
     }
 
@@ -566,35 +515,19 @@ mod Gamification {
             let new_total = self.total_achievements_earned.read() + 1;
             self.total_achievements_earned.write(new_total);
             
-            // Get worker address for transfers
-            let staking_addr = self.staking_contract.read();
-            let worker_address = if !staking_addr.is_zero() {
-                let staking = IWorkerStakingDispatcher { contract_address: staking_addr };
-                staking.get_worker_address(worker_id)
-            } else {
-                0.try_into().unwrap()
-            };
-
             // Transfer reward
-            if reward > 0 && !worker_address.is_zero() {
-                let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                let transfer_success = token.transfer(worker_address, reward);
-                assert!(transfer_success, "Achievement reward transfer failed");
+            if reward > 0 {
+                let staking = IWorkerStakingDispatcher { contract_address: self.staking_contract.read() };
+                let worker_address = staking.get_worker_address(worker_id);
+                
+                if !worker_address.is_zero() {
+                    let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+                    token.transfer(worker_address, reward);
+                }
             }
-
-            // Mint achievement NFT
-            let nft_addr = self.nft_contract.read();
-            if !nft_addr.is_zero() && !worker_address.is_zero() {
-                let nft = IAchievementNFTDispatcher { contract_address: nft_addr };
-                let metadata = AchievementMetadata {
-                    achievement_type,
-                    worker_id,
-                    earned_at: get_block_timestamp(),
-                    reward_amount: reward,
-                };
-                nft.mint_achievement(worker_address, nft_token_id, metadata);
-            }
-
+            
+            // TODO: Mint NFT
+            
             self.emit(AchievementUnlocked {
                 worker_id,
                 achievement_type,

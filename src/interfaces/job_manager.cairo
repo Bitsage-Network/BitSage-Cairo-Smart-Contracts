@@ -5,7 +5,7 @@
 //! 1. AI/ML training & inference (market-based $/GPU-hour)
 //! 2. ZK proof generation for Starknet (deterministic $/batch)
 
-use starknet::{ContractAddress, ClassHash};
+use starknet::ContractAddress;
 use core::array::Array;
 
 // Enhanced Job ID system supporting multiple job types
@@ -60,9 +60,9 @@ pub struct JobResult {
 }
 
 // Job type enumeration
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
 pub enum JobType {
-    #[default]
     AIInference,
     AITraining,
     ProofGeneration,
@@ -71,10 +71,10 @@ pub enum JobType {
     ConfidentialVM
 }
 
-// Verification method enumeration
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
+// Verification method enumeration  
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
 pub enum VerificationMethod {
-    #[default]
     None,
     StatisticalSampling,
     ZeroKnowledgeProof,
@@ -82,9 +82,9 @@ pub enum VerificationMethod {
 }
 
 // Job state enumeration
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
 pub enum JobState {
-    #[default]
     Queued,
     Processing,
     Completed,
@@ -269,37 +269,4 @@ pub trait IJobManager<TContractState> {
 
     /// Check if proof is verified and payment is ready for a job
     fn is_proof_payment_ready(self: @TContractState, job_id: JobId) -> bool;
-
-    // ============================================================================
-    // PHASE 4: Job Cancellation
-    // ============================================================================
-
-    /// Cancel an expired job and refund the client
-    /// Can be called by anyone (keeper-style) for expired jobs
-    /// @param job_id: The job to cancel
-    /// @return success: Whether the cancellation succeeded
-    fn cancel_expired_job(ref self: TContractState, job_id: JobId) -> bool;
-
-    /// Client can cancel their own job if still in Queued state
-    /// @param job_id: The job to cancel
-    fn cancel_job(ref self: TContractState, job_id: JobId);
-
-    /// Check if a job can be cancelled
-    fn can_cancel_job(self: @TContractState, job_id: JobId) -> bool;
-
-    // =========================================================================
-    // Upgradability Functions
-    // =========================================================================
-
-    /// Schedule a contract upgrade with timelock delay
-    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
-
-    /// Execute a scheduled upgrade after timelock has passed
-    fn execute_upgrade(ref self: TContractState);
-
-    /// Cancel a scheduled upgrade
-    fn cancel_upgrade(ref self: TContractState);
-
-    /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
-    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64, u64);
 } 

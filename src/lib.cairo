@@ -13,6 +13,8 @@ pub mod interfaces {
     pub mod job_manager;
     pub mod proof_verifier;
     pub mod reputation_manager;
+    // TODO: Create these interface files when needed
+    // mod task_allocator;
 }
 
 pub mod utils {
@@ -42,7 +44,6 @@ pub mod contracts {
     pub mod staking;
     pub mod gamification;
     pub mod fraud_proof;
-    pub mod achievement_nft;
 }
 
 pub mod obelysk;
@@ -77,9 +78,5 @@ pub mod tokenomics;
 // Accepts: USDC, STRK, wBTC, SAGE with tiered discounts
 // Features: OTC desk (no AMM dependency), staked SAGE credits, privacy payments
 pub mod payments;
-
-// Growth - Adoption and referral tools
-// Features: Tiered referral rewards, affiliate tracking
-pub mod growth;
 
 // Tests are located in the tests/ directory and managed by snforge

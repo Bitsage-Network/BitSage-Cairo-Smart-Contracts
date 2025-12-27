@@ -163,14 +163,10 @@ pub const SLASH_PERCENTAGE_MAJOR: u8 = 25;  // 25% slash for major violations
 pub const SLASH_PERCENTAGE_SEVERE: u8 = 50; // 50% slash for severe violations
 
 /// Time constants (in seconds)
-pub const SECONDS_PER_HOUR: u64 = 3600;     // 1 hour
-pub const SECONDS_PER_DAY: u64 = 86400;     // 24 hours
-pub const SECONDS_PER_WEEK: u64 = 604800;   // 7 days
 pub const UNSTAKE_DELAY: u64 = 604800;      // 7 days
 pub const JOB_TIMEOUT: u64 = 3600;          // 1 hour
 pub const HEARTBEAT_INTERVAL: u64 = 300;    // 5 minutes
 pub const DISPUTE_PERIOD: u64 = 259200;     // 3 days
-pub const CHALLENGE_PERIOD: u64 = 604800;   // 7 days for slash challenges
 
 /// Gas optimization constants
 pub const BATCH_SIZE_LIMIT: u32 = 50;       // Maximum batch size for operations
@@ -290,7 +286,6 @@ pub struct RateLimitInfo {
 
 /// Mathematical and scaling constants (SCALE already defined earlier)
 pub const BASIS_POINTS_SCALE: u32 = 10000;   // For percentage calculations (100% = 10000 bp)
-pub const BPS_DENOMINATOR: u256 = 10000;     // u256 version for fee calculations
 
 /// Network phase constants
 pub const PHASE_BOOTSTRAP: felt252 = 'bootstrap';

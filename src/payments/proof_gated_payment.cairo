@@ -155,11 +155,12 @@ mod ProofGatedPayment {
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
     use core::num::traits::Zero;
+    use core::poseidon::poseidon_hash_span;
 
     // Import interfaces for cross-contract calls
     use sage_contracts::interfaces::proof_verifier::{
         IProofVerifierDispatcher, IProofVerifierDispatcherTrait,
-        ProofJobId
+        ProofJobId, ProofStatus
     };
     use sage_contracts::payments::payment_router::{
         IPaymentRouterDispatcher, IPaymentRouterDispatcherTrait
@@ -292,11 +293,6 @@ mod ProofGatedPayment {
         proof_verifier: ContractAddress,
         optimistic_tee: ContractAddress
     ) {
-        assert!(!owner.is_zero(), "PGP: invalid owner");
-        assert!(!payment_router.is_zero(), "PGP: invalid router");
-        assert!(!proof_verifier.is_zero(), "PGP: invalid verifier");
-        assert!(!optimistic_tee.is_zero(), "PGP: invalid TEE");
-
         self.owner.write(owner);
         self.payment_router.write(payment_router);
         self.proof_verifier.write(proof_verifier);

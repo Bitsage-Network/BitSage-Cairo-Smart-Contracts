@@ -39,26 +39,18 @@ use sage_contracts::interfaces::job_manager::{JobId, ModelRequirements, WorkerId
 // Token interface for SAGE token operations
 use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 
-// Shared constants
-use sage_contracts::utils::constants::{
-    SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE
-};
-
 #[starknet::contract]
 mod CDCPool {
     use super::{
         ICDCPool, WorkerCapabilities, WorkerProfile, WorkerStatus, PerformanceMetrics,
         StakeInfo, UnstakeRequest, AllocationResult, SlashRecord, SlashReason, WorkerTier,
         WorkerTierBenefits, HolderTier, ContractAddress, get_caller_address, get_block_timestamp,
-        StoragePointerReadAccess, StoragePointerWriteAccess,
+        StoragePointerReadAccess, StoragePointerWriteAccess, 
         StorageMapReadAccess, StorageMapWriteAccess, Map,
         JobId, ModelRequirements, WorkerId, IERC20Dispatcher, IERC20DispatcherTrait,
         WorkerRegistered, WorkerDeactivated, WorkerReactivated, StakeAdded, UnstakeRequested,
-        UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased,
-        // Shared constants
-        SECONDS_PER_WEEK, CHALLENGE_PERIOD, SCALE
+        UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased
     };
-    use core::num::traits::Zero;
 
     // Helper constants
     const ZERO_ADDRESS: felt252 = 0;
@@ -89,11 +81,6 @@ mod CDCPool {
         next_unstake_id: felt252,
         total_staked: u256,
         min_stake: u256,
-
-        // Per-worker unstake request tracking
-        worker_unstake_requests: Map<(ContractAddress, u32), felt252>, // (worker, index) -> request_id
-        worker_unstake_count: Map<ContractAddress, u32>, // worker -> pending request count
-        unstake_request_processed: Map<felt252, bool>, // request_id -> is_processed
         
         // Reputation and performance tracking
         worker_reputation: Map<felt252, u64>,
@@ -109,12 +96,6 @@ mod CDCPool {
         slash_records: Map<felt252, SlashRecord>,
         next_slash_id: felt252,
         slash_percentages: Map<u8, u8>, // reason -> percentage
-
-        // Slash challenge tracking
-        slash_challenged: Map<felt252, bool>,        // slash_id -> is_challenged
-        challenge_evidence: Map<felt252, felt252>,   // slash_id -> evidence_hash
-        challenge_deadline: Map<felt252, u64>,       // slash_id -> challenge deadline
-        challenge_deposit: u256,                     // Required deposit to challenge (refunded if successful)
         
         // Rewards
         pending_rewards: Map<felt252, u256>,
@@ -129,9 +110,6 @@ mod CDCPool {
         // Network stats
         total_jobs_processed: u32,
         last_heartbeat: Map<felt252, u64>, // worker_id -> timestamp
-
-        // Security: Reentrancy guard
-        reentrancy_locked: bool,
     }
 
     #[event]
@@ -146,28 +124,6 @@ mod CDCPool {
         JobAllocated: JobAllocated,
         WorkerReserved: WorkerReserved,
         WorkerReleased: WorkerReleased,
-        SlashChallenged: SlashChallenged,
-        ChallengeResolved: ChallengeResolved,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct SlashChallenged {
-        #[key]
-        slash_id: felt252,
-        #[key]
-        worker: ContractAddress,
-        challenger: ContractAddress,
-        evidence_hash: felt252,
-        deadline: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct ChallengeResolved {
-        #[key]
-        slash_id: felt252,
-        upheld: bool,
-        deposit_returned: bool,
-        timestamp: u64,
     }
 
     #[constructor]
@@ -177,16 +133,13 @@ mod CDCPool {
         sage_token: ContractAddress,
         min_stake: u256
     ) {
-        assert!(!admin.is_zero(), "CDC: invalid admin");
-        assert!(!sage_token.is_zero(), "CDC: invalid token");
-
         self.admin.write(admin);
         self.sage_token.write(sage_token);
         self.min_stake.write(min_stake);
         self.next_worker_id.write(1);
         self.next_unstake_id.write(1);
         self.next_slash_id.write(1);
-        self.base_reward_rate.write(SCALE); // 1 SAGE base rate
+        self.base_reward_rate.write(1000000000000000000); // 1 SAGE base rate
         self.performance_multiplier.write(50); // 50% bonus
         self.ciro_price_usd_cents.write(100); // $1.00 initial price
         
@@ -225,7 +178,7 @@ mod CDCPool {
             
             // Check if worker already exists
             let existing_worker = self.owner_to_worker.read(caller);
-            assert!(existing_worker == 0, "CDC: worker already registered");
+            assert!(existing_worker == 0, "Worker already registered");
             
             // Generate new worker ID
             let worker_id_felt = self.next_worker_id.read();
@@ -281,7 +234,7 @@ mod CDCPool {
             let worker_key = worker_id.value;
             // Cairo 2.12.0: More descriptive error messages
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "CDC: not worker owner");
+            assert!(owner == caller, "Not worker owner");
             
             self.worker_capabilities.write(worker_key, new_capabilities);
             
@@ -296,7 +249,7 @@ mod CDCPool {
             let worker_key = worker_id.value;
             // Cairo 2.12.0: Enhanced validation with better error context
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "CDC: not worker owner");
+            assert!(owner == caller, "Not worker owner");
             
             let current_status = self.worker_status.read(worker_key);
             if current_status == WorkerStatus::Active {
@@ -315,7 +268,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "CDC: not worker owner");
+            assert!(owner == caller, "Not worker owner");
             
             let current_status = self.worker_status.read(worker_key);
             assert!(current_status == WorkerStatus::Inactive, "Worker not inactive");
@@ -336,7 +289,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "CDC: not worker owner");
+            assert!(owner == caller, "Not worker owner");
             
             self.last_heartbeat.write(worker_key, get_block_timestamp());
             self.worker_performance.write(worker_key, performance_data);
@@ -345,16 +298,14 @@ mod CDCPool {
         // Staking Functions
 
         fn stake(ref self: ContractState, amount: u256, lock_period: u64) {
-            self._reentrancy_guard_start();
             assert!(!self.paused.read(), "Contract is paused");
-            assert!(amount >= self.min_stake.read(), "CDC: stake below minimum");
+            assert!(amount >= self.min_stake.read(), "Amount below minimum stake");
             
             let caller = get_caller_address();
             let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             
             // Transfer tokens from caller
-            let transfer_success = sage_token.transfer_from(caller, starknet::get_contract_address(), amount);
-            assert!(transfer_success, "CDC: transfer_from failed");
+            sage_token.transfer_from(caller, starknet::get_contract_address(), amount);
             
             // Update stake info
             let mut stake_info = self.stakes.read(caller);
@@ -370,17 +321,15 @@ mod CDCPool {
                 amount,
                 total_stake: stake_info.amount,
             }));
-            self._reentrancy_guard_end();
         }
 
         fn request_unstake(ref self: ContractState, amount: u256) -> u64 {
-            self._reentrancy_guard_start();
             let caller = get_caller_address();
             let stake_info = self.stakes.read(caller);
             // Cairo 2.12.0: Better stake validation with clear error messages
-            assert!(stake_info.amount >= amount, "CDC: insufficient stake");
+            assert!(stake_info.amount >= amount, "Insufficient stake");
             
-            let unlock_time = get_block_timestamp() + SECONDS_PER_WEEK;
+            let unlock_time = get_block_timestamp() + 604800; // 7 days
             let unstake_id = self.next_unstake_id.read();
             
             let request = UnstakeRequest {
@@ -392,19 +341,13 @@ mod CDCPool {
             
             self.unstake_requests.write(unstake_id, request);
             self.next_unstake_id.write(unstake_id + 1);
-
-            // Track this request for the worker
-            let worker_request_count = self.worker_unstake_count.read(caller);
-            self.worker_unstake_requests.write((caller, worker_request_count), unstake_id);
-            self.worker_unstake_count.write(caller, worker_request_count + 1);
-
+            
             self.emit(Event::UnstakeRequested(UnstakeRequested {
                 worker: caller,
                 amount,
                 unlock_time,
             }));
-
-            self._reentrancy_guard_end();
+            
             unlock_time
         }
 
@@ -415,63 +358,32 @@ mod CDCPool {
         }
 
         fn complete_unstake(ref self: ContractState) {
-            self._reentrancy_guard_start();
             let caller = get_caller_address();
-            let current_time = get_block_timestamp();
-            let mut stake_info = self.stakes.read(caller);
-
-            // Process all matured unstake requests for this worker
-            let request_count = self.worker_unstake_count.read(caller);
-            let mut total_unstaked: u256 = 0;
-            let mut i: u32 = 0;
-
-            while i < request_count {
-                let request_id = self.worker_unstake_requests.read((caller, i));
-
-                // Skip already processed requests
-                if self.unstake_request_processed.read(request_id) {
-                    i += 1;
-                    continue;
-                }
-
-                let request = self.unstake_requests.read(request_id);
-
-                // Check if this request has matured
-                if request.unlock_time <= current_time {
-                    // Mark as processed
-                    self.unstake_request_processed.write(request_id, true);
-                    total_unstaked += request.amount;
-
-                    self.emit(Event::UnstakeExecuted(UnstakeExecuted {
-                        worker: caller,
-                        amount: request.amount,
-                    }));
-                }
-
-                i += 1;
-            };
-
-            // If any requests were processed, update stake and transfer tokens
-            if total_unstaked > 0 {
-                assert!(stake_info.amount >= total_unstaked, "CDC: stake underflow");
-                stake_info.amount -= total_unstaked;
-                stake_info.last_adjustment = current_time;
-
-                // Update total staked
-                let total = self.total_staked.read();
-                if total >= total_unstaked {
-                    self.total_staked.write(total - total_unstaked);
-                }
-
-                self.stakes.write(caller, stake_info);
-
-                // Transfer tokens back to worker
+            // Find and process unstake request for caller
+            // Simplified implementation - in reality would need to track individual requests
+            let stake_info = self.stakes.read(caller);
+            
+            if stake_info.locked_until <= get_block_timestamp() {
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                let transfer_success = sage_token.transfer(caller, total_unstaked);
-                assert!(transfer_success, "CDC: transfer failed");
+                sage_token.transfer(caller, stake_info.amount);
+                
+                let empty_stake = StakeInfo {
+                    amount: 0,
+                    usd_value: 0,
+                    tier: WorkerTier::Basic,
+                    locked_until: 0,
+                    last_adjustment: 0,
+                    last_reward_block: 0,
+                    delegated_amount: 0,
+                    performance_score: 0,
+                };
+                self.stakes.write(caller, empty_stake);
+                
+                self.emit(Event::UnstakeExecuted(UnstakeExecuted {
+                    worker: caller,
+                    amount: stake_info.amount,
+                }));
             }
-
-            self._reentrancy_guard_end();
         }
 
         fn increase_stake(ref self: ContractState, additional_amount: u256) {
@@ -482,7 +394,7 @@ mod CDCPool {
             let caller = get_caller_address();
             let mut stake_info = self.stakes.read(caller);
             // Cairo 2.12.0: Improved delegation validation
-            assert!(stake_info.amount >= amount, "CDC: insufficient stake");
+            assert!(stake_info.amount >= amount, "Insufficient stake");
             
             stake_info.delegated_amount += amount;
             self.stakes.write(caller, stake_info);
@@ -502,90 +414,32 @@ mod CDCPool {
             priority: u8,
             max_latency: u64
         ) -> AllocationResult {
-            // Input validation
-            assert!(priority <= 10, "Priority must be 0-10");
-            assert!(max_latency > 0, "Max latency must be positive");
-            assert!(max_latency <= SECONDS_PER_WEEK, "Max latency exceeds 7 days");
-            assert!(requirements.min_memory_gb > 0, "Memory requirement must be positive");
-
-            // Production allocation algorithm with multi-factor scoring
+            // Simplified allocation algorithm - find first available worker
             let zero_address: ContractAddress = 0.try_into().unwrap();
             let mut best_worker = zero_address;
-            let mut best_score: u8 = 0;
-            let mut best_worker_id: felt252 = 0;
+            let mut best_score = 0;
             let mut worker_id_u256: u256 = 1;
             let max_worker_id: u256 = self.next_worker_id.read().into();
-
+            
+            // In a real implementation, this would be more sophisticated
             while worker_id_u256 != max_worker_id {
                 let worker_id_felt: felt252 = worker_id_u256.try_into().unwrap();
                 let status = self.worker_status.read(worker_id_felt);
-
                 if status == WorkerStatus::Active {
                     let capabilities = self.worker_capabilities.read(worker_id_felt);
-
-                    // Check minimum requirements
                     if capabilities.gpu_memory >= requirements.min_memory_gb.into() {
-                        // Calculate worker score based on multiple factors (max 95)
-                        let mut score: u8 = 50; // Base score for meeting requirements
-
-                        // Factor 1: Reputation (0-20 points)
-                        let reputation = self.worker_reputation.read(worker_id_felt);
-                        let reputation_score: u8 = if reputation >= 100 {
-                            20
-                        } else if reputation >= 80 {
-                            15
-                        } else if reputation >= 60 {
-                            10
-                        } else {
-                            5
-                        };
-                        score += reputation_score;
-
-                        // Factor 2: Performance history (0-15 points)
-                        let jobs_completed = self.worker_jobs_completed.read(worker_id_felt);
-                        let jobs_failed = self.worker_jobs_failed.read(worker_id_felt);
-                        let total_jobs = jobs_completed + jobs_failed;
-                        let perf_score: u8 = if total_jobs == 0 {
-                            8 // New worker gets middle score
-                        } else {
-                            let success_rate = (jobs_completed * 100) / total_jobs;
-                            if success_rate >= 98 { 15 }
-                            else if success_rate >= 95 { 12 }
-                            else if success_rate >= 90 { 9 }
-                            else if success_rate >= 80 { 6 }
-                            else { 3 }
-                        };
-                        score += perf_score;
-
-                        // Factor 3: Tier bonus (0-10 points)
-                        let worker_owner = self.worker_owners.read(worker_id_felt);
-                        let stake_info = self.stakes.read(worker_owner);
-                        let tier_score: u8 = match stake_info.tier {
-                            WorkerTier::Basic => 0,
-                            WorkerTier::Premium => 2,
-                            WorkerTier::Enterprise => 4,
-                            WorkerTier::Infrastructure => 6,
-                            WorkerTier::Fleet => 7,
-                            WorkerTier::Datacenter => 8,
-                            WorkerTier::Hyperscale => 9,
-                            WorkerTier::Institutional => 10,
-                        };
-                        score += tier_score;
-
-                        // Update best if this worker scores higher
-                        if score > best_score {
-                            best_score = score;
-                            best_worker = worker_owner;
-                            best_worker_id = worker_id_felt;
-                        }
+                        best_worker = self.worker_owners.read(worker_id_felt);
+                        best_score = 90; // High confidence
+                        break;
                     }
                 }
                 worker_id_u256 += 1;
             };
-
+            
             if best_worker != zero_address {
                 let job_key: felt252 = job_id.value.try_into().unwrap();
-                self.job_allocations.write(job_key, best_worker_id);
+                let worker_id_felt: felt252 = worker_id_u256.try_into().unwrap();
+                self.job_allocations.write(job_key, worker_id_felt);
                 
                 let allocation = AllocationResult {
                     worker: best_worker,
@@ -595,7 +449,7 @@ mod CDCPool {
                 
                 self.emit(Event::JobAllocated(JobAllocated {
                     job_id,
-                    worker_id: WorkerId { value: best_worker_id },
+                    worker_id: WorkerId { value: worker_id_felt },
                     confidence_score: best_score,
                     estimated_completion: allocation.estimated_completion,
                 }));
@@ -733,7 +587,7 @@ mod CDCPool {
             evidence: Array<felt252>
         ) -> u256 {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only for slash");
+            assert!(caller == self.admin.read(), "Only admin can slash");
             
             let worker_key = worker_id.value;
             let worker_owner = self.worker_owners.read(worker_key);
@@ -769,52 +623,11 @@ mod CDCPool {
             worker_id: WorkerId,
             evidence: Array<felt252>
         ) {
-            self._reentrancy_guard_start();
-
+            // Simplified implementation - in reality would start dispute process
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "CDC: not worker owner");
-
-            // Find the most recent slash for this worker
-            let slash_id = self.next_slash_id.read() - 1;
-            let slash_record = self.slash_records.read(slash_id);
-            assert!(slash_record.worker == owner, "No slash found for worker");
-
-            // Check slash hasn't already been challenged
-            assert!(!self.slash_challenged.read(slash_id), "Already challenged");
-
-            // Check challenge deadline (7 days from slash)
-            assert!(
-                get_block_timestamp() < slash_record.timestamp + CHALLENGE_PERIOD,
-                "Challenge window expired"
-            );
-
-            // Collect challenge deposit
-            let deposit = self.challenge_deposit.read();
-            if deposit > 0 {
-                let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                let transfer_success = sage_token.transfer_from(caller, starknet::get_contract_address(), deposit);
-                assert!(transfer_success, "CDC: transfer_from failed");
-            }
-
-            // Record challenge
-            let evidence_hash = if evidence.len() > 0 { *evidence.at(0) } else { 0 };
-            let deadline = get_block_timestamp() + CHALLENGE_PERIOD;
-
-            self.slash_challenged.write(slash_id, true);
-            self.challenge_evidence.write(slash_id, evidence_hash);
-            self.challenge_deadline.write(slash_id, deadline);
-
-            self.emit(SlashChallenged {
-                slash_id,
-                worker: owner,
-                challenger: caller,
-                evidence_hash,
-                deadline,
-            });
-
-            self._reentrancy_guard_end();
+            assert!(owner == caller, "Not worker owner");
         }
 
         fn resolve_slash_challenge(
@@ -822,57 +635,14 @@ mod CDCPool {
             worker_id: WorkerId,
             upheld: bool
         ) {
-            self._reentrancy_guard_start();
-
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only for resolve");
-
-            let worker_key = worker_id.value;
-            let owner = self.worker_owners.read(worker_key);
-
-            // Find the challenged slash
-            let slash_id = self.next_slash_id.read() - 1;
-            assert!(self.slash_challenged.read(slash_id), "CDC: slash not challenged");
-
-            let slash_record = self.slash_records.read(slash_id);
-            let deposit = self.challenge_deposit.read();
-            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-
+            assert!(caller == self.admin.read(), "Only admin can resolve");
+            
             if !upheld {
-                // Challenge successful - restore worker and refund stake + deposit
+                // Restore worker status
+                let worker_key = worker_id.value;
                 self.worker_status.write(worker_key, WorkerStatus::Active);
-
-                // Refund slashed amount
-                let mut stake_info = self.stakes.read(owner);
-                stake_info.amount += slash_record.amount;
-                self.stakes.write(owner, stake_info);
-
-                // Return challenge deposit
-                if deposit > 0 {
-                    let transfer_success = sage_token.transfer(owner, deposit);
-                    assert!(transfer_success, "CDC: transfer failed");
-                }
-
-                self.emit(ChallengeResolved {
-                    slash_id,
-                    upheld: false,
-                    deposit_returned: true,
-                    timestamp: get_block_timestamp(),
-                });
-            } else {
-                // Slash upheld - challenger loses deposit (goes to treasury/protocol)
-                self.emit(ChallengeResolved {
-                    slash_id,
-                    upheld: true,
-                    deposit_returned: false,
-                    timestamp: get_block_timestamp(),
-                });
             }
-
-            // Clear challenge state
-            self.slash_challenged.write(slash_id, false);
-
-            self._reentrancy_guard_end();
         }
 
         // Reward Distribution Functions
@@ -905,23 +675,19 @@ mod CDCPool {
         }
 
         fn claim_rewards(ref self: ContractState, worker_id: WorkerId) -> u256 {
-            self._reentrancy_guard_start();
             let caller = get_caller_address();
             let worker_key = worker_id.value;
             let owner = self.worker_owners.read(worker_key);
-            assert!(owner == caller, "CDC: not worker owner");
-
+            assert!(owner == caller, "Not worker owner");
+            
             let pending = self.pending_rewards.read(worker_key);
             if pending > 0 {
-                // SECURITY: Update state BEFORE external call (CEI pattern)
                 self.pending_rewards.write(worker_key, 0);
-
+                
                 let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                let transfer_success = sage_token.transfer(caller, pending);
-                assert!(transfer_success, "CDC: transfer failed");
+                sage_token.transfer(caller, pending);
             }
-
-            self._reentrancy_guard_end();
+            
             pending
         }
 
@@ -995,87 +761,23 @@ mod CDCPool {
             metric: felt252,
             limit: u32
         ) -> Array<WorkerId> {
-            // Production leaderboard with selection sort for top N
-            // Metric types: 'reputation' = 1, 'jobs' = 2, 'earnings' = 3
-            let max_worker_id: u256 = self.next_worker_id.read().into();
-
-            // First pass: collect all active workers with their scores
-            let mut worker_scores: Array<(felt252, u256)> = array![];
+            // Simplified leaderboard - in reality would need sorting
+            let mut workers = array![];
+            let mut found = 0;
             let mut worker_id_u256: u256 = 1;
-
-            while worker_id_u256 != max_worker_id {
+            let max_worker_id: u256 = self.next_worker_id.read().into();
+            
+            while worker_id_u256 != max_worker_id && found != limit {
                 let worker_id_felt: felt252 = worker_id_u256.try_into().unwrap();
                 let status = self.worker_status.read(worker_id_felt);
-
                 if status == WorkerStatus::Active {
-                    let score: u256 = if metric == 1 {
-                        // Reputation metric
-                        self.worker_reputation.read(worker_id_felt).into()
-                    } else if metric == 2 {
-                        // Jobs completed metric
-                        self.worker_jobs_completed.read(worker_id_felt).into()
-                    } else if metric == 3 {
-                        // Earnings metric
-                        self.worker_total_earnings.read(worker_id_felt)
-                    } else {
-                        // Default to reputation
-                        self.worker_reputation.read(worker_id_felt).into()
-                    };
-
-                    worker_scores.append((worker_id_felt, score));
+                    workers.append(WorkerId { value: worker_id_felt });
+                    found += 1;
                 }
-
                 worker_id_u256 += 1;
             };
-
-            // Selection sort for top N (O(n * limit) - efficient for small limit)
-            let mut result: Array<WorkerId> = array![];
-            let mut selected: Array<usize> = array![];
-            let total_workers = worker_scores.len();
-            let mut found: u32 = 0;
-
-            while found < limit && found < total_workers.try_into().unwrap() {
-                let mut best_idx: usize = 0;
-                let mut best_score: u256 = 0;
-                let mut best_worker: felt252 = 0;
-                let mut already_selected: bool = false;
-
-                // Find highest scoring unselected worker
-                let mut i: usize = 0;
-                while i < total_workers {
-                    // Check if already selected
-                    already_selected = false;
-                    let mut j: usize = 0;
-                    while j < selected.len() {
-                        if *selected.at(j) == i {
-                            already_selected = true;
-                            break;
-                        }
-                        j += 1;
-                    };
-
-                    if !already_selected {
-                        let (worker_id, score) = *worker_scores.at(i);
-                        if score > best_score || best_worker == 0 {
-                            best_score = score;
-                            best_worker = worker_id;
-                            best_idx = i;
-                        }
-                    }
-
-                    i += 1;
-                };
-
-                if best_worker != 0 {
-                    result.append(WorkerId { value: best_worker });
-                    selected.append(best_idx);
-                    found += 1;
-                } else {
-                    break;
-                }
-            };
-
-            result
+            
+            workers
         }
 
         fn get_stake_info(self: @ContractState, worker: ContractAddress) -> StakeInfo {
@@ -1086,23 +788,8 @@ mod CDCPool {
             self: @ContractState,
             worker: ContractAddress
         ) -> Array<UnstakeRequest> {
-            let mut requests: Array<UnstakeRequest> = array![];
-            let request_count = self.worker_unstake_count.read(worker);
-            let mut i: u32 = 0;
-
-            while i < request_count {
-                let request_id = self.worker_unstake_requests.read((worker, i));
-
-                // Only include unprocessed requests
-                if !self.unstake_request_processed.read(request_id) {
-                    let request = self.unstake_requests.read(request_id);
-                    requests.append(request);
-                }
-
-                i += 1;
-            };
-
-            requests
+            // Simplified - would need to track per-worker requests
+            array![]
         }
 
         fn get_unstake_requests(
@@ -1110,38 +797,15 @@ mod CDCPool {
             offset: u32,
             limit: u32
         ) -> Array<UnstakeRequest> {
-            let mut requests: Array<UnstakeRequest> = array![];
-            let total_requests: u32 = self.next_unstake_id.read().try_into().unwrap_or(0);
-
-            if offset >= total_requests {
-                return requests;
-            }
-
-            let end = if offset + limit > total_requests {
-                total_requests
-            } else {
-                offset + limit
-            };
-
-            let mut i: u32 = offset;
-            while i < end {
-                let request_id: felt252 = i.into();
-                // Only include unprocessed requests
-                if !self.unstake_request_processed.read(request_id) {
-                    let request = self.unstake_requests.read(request_id);
-                    requests.append(request);
-                }
-                i += 1;
-            };
-
-            requests
+            // Simplified implementation
+            array![]
         }
 
         // Worker Tier Functions
 
         fn get_worker_tier(self: @ContractState, worker: ContractAddress) -> WorkerTier {
             let stake_info = self.stakes.read(worker);
-            let usd_value = (stake_info.amount * self.ciro_price_usd_cents.read()) / SCALE;
+            let usd_value = (stake_info.amount * self.ciro_price_usd_cents.read()) / 1000000000000000000; // Convert from wei
             
             if usd_value >= self.tier_usd_requirements.read(7) {
                 WorkerTier::Institutional
@@ -1185,7 +849,7 @@ mod CDCPool {
 
         fn get_stake_usd_value(self: @ContractState, worker: ContractAddress) -> u256 {
             let stake_info = self.stakes.read(worker);
-            (stake_info.amount * self.ciro_price_usd_cents.read()) / SCALE
+            (stake_info.amount * self.ciro_price_usd_cents.read()) / 1000000000000000000 // Convert from wei
         }
 
         fn get_tier_ciro_requirement(self: @ContractState, tier: WorkerTier) -> u256 {
@@ -1204,12 +868,12 @@ mod CDCPool {
             let ciro_price = self.ciro_price_usd_cents.read();
             
             // Calculate SAGE tokens needed (in wei)
-            (usd_requirement * SCALE) / ciro_price
+            (usd_requirement * 1000000000000000000) / ciro_price
         }
 
         fn update_ciro_price(ref self: ContractState, new_price: u256) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only for price");
+            assert!(caller == self.admin.read(), "Only admin can update price");
             self.ciro_price_usd_cents.write(new_price);
         }
 
@@ -1243,7 +907,7 @@ mod CDCPool {
         fn get_holder_tier(self: @ContractState, holder: ContractAddress) -> HolderTier {
             let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
             let balance = sage_token.balance_of(holder);
-            let usd_value = (balance * self.ciro_price_usd_cents.read()) / SCALE;
+            let usd_value = (balance * self.ciro_price_usd_cents.read()) / 1000000000000000000;
             
             if balance >= 100000000000000000000000000 && usd_value >= 5000000 { // 100M SAGE + $50M
                 HolderTier::HyperWhale
@@ -1282,7 +946,7 @@ mod CDCPool {
 
         fn update_min_stake(ref self: ContractState, new_min_stake: u256) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only");
+            assert!(caller == self.admin.read(), "Only admin");
             self.min_stake.write(new_min_stake);
         }
 
@@ -1292,7 +956,7 @@ mod CDCPool {
             percentage: u8
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only");
+            assert!(caller == self.admin.read(), "Only admin");
             let reason_u8: u8 = reason.into();
             self.slash_percentages.write(reason_u8, percentage);
         }
@@ -1303,20 +967,20 @@ mod CDCPool {
             performance_multiplier: u8
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only");
+            assert!(caller == self.admin.read(), "Only admin");
             self.base_reward_rate.write(base_rate);
             self.performance_multiplier.write(performance_multiplier);
         }
 
         fn pause_contract(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only");
+            assert!(caller == self.admin.read(), "Only admin");
             self.paused.write(true);
         }
 
         fn resume_contract(ref self: ContractState) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only");
+            assert!(caller == self.admin.read(), "Only admin");
             self.paused.write(false);
         }
 
@@ -1326,43 +990,15 @@ mod CDCPool {
             reason: felt252
         ) {
             let caller = get_caller_address();
-            assert!(caller == self.admin.read(), "CDC: admin only");
-
+            assert!(caller == self.admin.read(), "Only admin");
+            
             let worker_key = worker_id.value;
             self.worker_status.write(worker_key, WorkerStatus::Banned);
-
+            
             let current_status = self.worker_status.read(worker_key);
             if current_status == WorkerStatus::Active {
                 self.active_workers.write(self.active_workers.read() - 1);
             }
-        }
-    }
-
-    // =========================================================================
-    // INTERNAL HELPER FUNCTIONS
-    // =========================================================================
-
-    #[generate_trait]
-    impl InternalImpl of InternalTrait {
-        /// Start reentrancy guard
-        fn _reentrancy_guard_start(ref self: ContractState) {
-            assert!(!self.reentrancy_locked.read(), "ReentrancyGuard: reentrant call");
-            self.reentrancy_locked.write(true);
-        }
-
-        /// End reentrancy guard
-        fn _reentrancy_guard_end(ref self: ContractState) {
-            self.reentrancy_locked.write(false);
-        }
-
-        /// Check if caller is admin
-        fn _only_admin(self: @ContractState) {
-            assert!(get_caller_address() == self.admin.read(), "CDC: admin only");
-        }
-
-        /// Check if contract is not paused
-        fn _when_not_paused(self: @ContractState) {
-            assert!(!self.paused.read(), "Contract is paused");
         }
     }
 }

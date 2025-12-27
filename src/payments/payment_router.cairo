@@ -5,7 +5,7 @@
 // Accepts: USDC, STRK, wBTC, SAGE with tiered discounts
 // All payments flow through Obelysk as SAGE with optional privacy
 
-use starknet::{ContractAddress, ClassHash};
+use starknet::ContractAddress;
 
 // Re-export ECPoint for interface usage
 pub use sage_contracts::obelysk::elgamal::ECPoint;
@@ -33,7 +33,6 @@ pub struct PaymentQuote {
     pub usd_value: u256,           // USD value (18 decimals)
     pub expires_at: u64,           // Quote expiration timestamp
     pub is_valid: bool,
-    pub quoted_sage_price: u256,   // SAGE/USD price at quote time (for slippage check)
 }
 
 /// OTC desk configuration
@@ -71,19 +70,6 @@ pub struct DiscountTiers {
     pub sage_discount_bps: u32,          // SAGE direct: 500 = 5%
     pub staked_sage_discount_bps: u32,   // Staked SAGE: 1000 = 10%
     pub privacy_credit_discount_bps: u32, // Privacy: 200 = 2%
-}
-
-/// Dynamic fee tiers based on monthly volume
-/// Higher volume = lower protocol fees to incentivize growth
-#[derive(Copy, Drop, Serde, starknet::Store)]
-pub struct DynamicFeeTiers {
-    pub tier1_threshold: u256,    // Volume threshold for tier 1 (e.g., $100K)
-    pub tier1_fee_bps: u32,       // Fee at tier 1 (e.g., 1800 = 18%)
-    pub tier2_threshold: u256,    // Volume threshold for tier 2 (e.g., $500K)
-    pub tier2_fee_bps: u32,       // Fee at tier 2 (e.g., 1500 = 15%)
-    pub tier3_threshold: u256,    // Volume threshold for tier 3 (e.g., $1M)
-    pub tier3_fee_bps: u32,       // Fee at tier 3 (e.g., 1200 = 12%)
-    pub enabled: bool,            // Whether dynamic fees are active
 }
 
 #[starknet::interface]
@@ -170,9 +156,6 @@ pub trait IPaymentRouter<TContractState> {
     /// Admin: Set staker rewards pool address
     fn set_staker_rewards_pool(ref self: TContractState, pool: ContractAddress);
 
-    /// Set referral system contract for affiliate rewards
-    fn set_referral_system(ref self: TContractState, referral_system: ContractAddress);
-
     /// Register job with worker (called by JobManager)
     /// @param job_id: Job identifier
     /// @param worker: GPU provider address
@@ -196,167 +179,19 @@ pub trait IPaymentRouter<TContractState> {
 
     /// Get worker's public key
     fn get_worker_public_key(self: @TContractState, worker: ContractAddress) -> ECPoint;
-
-    // =========================================================================
-    // Two-Step Ownership Transfer
-    // =========================================================================
-
-    /// Start ownership transfer (current owner only)
-    fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
-
-    /// Accept ownership (pending owner only)
-    fn accept_ownership(ref self: TContractState);
-
-    /// Cancel pending ownership transfer (current owner only)
-    fn cancel_ownership_transfer(ref self: TContractState);
-
-    /// Get current owner
-    fn owner(self: @TContractState) -> ContractAddress;
-
-    /// Get pending owner
-    fn pending_owner(self: @TContractState) -> ContractAddress;
-
-    // =========================================================================
-    // Pausable
-    // =========================================================================
-
-    /// Pause the contract (owner only)
-    fn pause(ref self: TContractState);
-
-    /// Unpause the contract (owner only)
-    fn unpause(ref self: TContractState);
-
-    /// Check if contract is paused
-    fn is_paused(self: @TContractState) -> bool;
-
-    // =========================================================================
-    // Rate Limiting
-    // =========================================================================
-
-    /// Admin: Set rate limit configuration
-    /// @param window_secs: Duration of rate limit window in seconds
-    /// @param max_payments: Maximum number of payments allowed per window
-    fn set_rate_limit(ref self: TContractState, window_secs: u64, max_payments: u32);
-
-    /// Get current rate limit configuration
-    fn get_rate_limit(self: @TContractState) -> (u64, u32);
-
-    /// Get user's current payment count in window
-    fn get_user_payment_count(self: @TContractState, user: ContractAddress) -> u32;
-
-    // =========================================================================
-    // Timelock for Critical Parameter Changes
-    // =========================================================================
-
-    /// Propose a new fee distribution (starts timelock)
-    fn propose_fee_distribution(ref self: TContractState, distribution: FeeDistribution);
-
-    /// Execute pending fee distribution (after timelock expires)
-    fn execute_fee_distribution(ref self: TContractState);
-
-    /// Cancel pending fee distribution
-    fn cancel_fee_distribution(ref self: TContractState);
-
-    /// Get pending fee distribution and execution timestamp
-    fn get_pending_fee_distribution(self: @TContractState) -> (FeeDistribution, u64);
-
-    /// Get current timelock delay
-    fn get_timelock_delay(self: @TContractState) -> u64;
-
-    /// Set timelock delay (owner only, immediate change)
-    fn set_timelock_delay(ref self: TContractState, delay: u64);
-
-    // =========================================================================
-    // Emergency Withdrawal (when paused)
-    // =========================================================================
-
-    /// Emergency withdraw ERC20 tokens (owner only, requires paused state)
-    /// Use only in emergencies when funds need to be recovered
-    fn emergency_withdraw(
-        ref self: TContractState,
-        token: ContractAddress,
-        recipient: ContractAddress,
-        amount: u256
-    );
-
-    /// Get treasury balances
-    fn get_treasury_balances(self: @TContractState) -> (u256, u256, u256, u256);
-
-    // =========================================================================
-    // Oracle Health Configuration
-    // =========================================================================
-
-    /// Admin: Set oracle health requirements
-    /// @param require_healthy: If true, payments fail when oracle is degraded
-    /// @param max_staleness: Maximum age of oracle price in seconds (0 = use oracle default)
-    fn set_oracle_requirements(
-        ref self: TContractState,
-        require_healthy: bool,
-        max_staleness: u64
-    );
-
-    /// Get current oracle health configuration
-    fn get_oracle_requirements(self: @TContractState) -> (bool, u64);
-
-    // =========================================================================
-    // Staked Credit Limits
-    // =========================================================================
-
-    /// Admin: Set staked credit limit as percentage of staked balance
-    /// @param limit_bps: Maximum credit as basis points of staked balance (e.g., 5000 = 50%)
-    fn set_staked_credit_limit(ref self: TContractState, limit_bps: u32);
-
-    /// Get current staked credit limit configuration
-    fn get_staked_credit_limit(self: @TContractState) -> u32;
-
-    /// Get user's remaining staked credit available
-    fn get_available_staked_credit(self: @TContractState, user: ContractAddress) -> u256;
-
-    // =========================================================================
-    // Dynamic Fee Tiers
-    // =========================================================================
-
-    /// Admin: Set dynamic fee tier configuration
-    fn set_dynamic_fee_tiers(ref self: TContractState, tiers: DynamicFeeTiers);
-
-    /// Get current dynamic fee tier configuration
-    fn get_dynamic_fee_tiers(self: @TContractState) -> DynamicFeeTiers;
-
-    /// Get current effective protocol fee based on monthly volume
-    fn get_current_protocol_fee(self: @TContractState) -> u32;
-
-    /// Get current monthly volume
-    fn get_monthly_volume(self: @TContractState) -> u256;
-
-    // =========================================================================
-    // Upgradability Functions
-    // =========================================================================
-
-    /// Schedule a contract upgrade with timelock delay
-    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
-
-    /// Execute a scheduled upgrade after timelock has passed
-    fn execute_upgrade(ref self: TContractState);
-
-    /// Cancel a scheduled upgrade
-    fn cancel_upgrade(ref self: TContractState);
-
-    /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
-    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64, u64);
 }
 
 #[starknet::contract]
 mod PaymentRouter {
     use super::{
         IPaymentRouter, PaymentToken, PaymentQuote, OTCConfig,
-        FeeDistribution, DiscountTiers, ECPoint, DynamicFeeTiers
+        FeeDistribution, DiscountTiers, ECPoint
     };
-    use starknet::{ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_contract_address};
+    use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
-    use starknet::SyscallResultTrait;
     use core::num::traits::Zero;
     use sage_contracts::oracle::pragma_oracle::{
         IOracleWrapperDispatcher, IOracleWrapperDispatcherTrait, PricePair
@@ -371,27 +206,15 @@ mod PaymentRouter {
     // Obelysk Privacy Router for private worker payments
     use sage_contracts::obelysk::privacy_router::{IPrivacyRouterDispatcher, IPrivacyRouterDispatcherTrait};
     use sage_contracts::obelysk::elgamal::{encrypt, is_zero};
-    use sage_contracts::growth::referral_system::{IReferralSystemDispatcher, IReferralSystemDispatcherTrait};
-
-    // Prover Staking for credit limit enforcement
-    use sage_contracts::staking::prover_staking::{IProverStakingDispatcher, IProverStakingDispatcherTrait};
 
     // Base SAGE price: $0.10 = 100000000000000000 (0.1 * 10^18)
     const BASE_SAGE_PRICE_USD: u256 = 100000000000000000;
     const USD_DECIMALS: u256 = 1000000000000000000; // 10^18
     const BPS_DENOMINATOR: u256 = 10000;
 
-    // Timelock constants
-    const DEFAULT_TIMELOCK_DELAY: u64 = 172800; // 48 hours in seconds
-    const MIN_TIMELOCK_DELAY: u64 = 3600;       // 1 hour minimum
-    const MAX_TIMELOCK_DELAY: u64 = 604800;     // 7 days maximum
-    const UPGRADE_DELAY: u64 = 172800;          // 2 days timelock for upgrades
-
     #[storage]
     struct Storage {
         owner: ContractAddress,
-        pending_owner: ContractAddress,  // Two-step ownership transfer
-        paused: bool,                     // Emergency pause
         otc_config: OTCConfig,
         fee_distribution: FeeDistribution,
         discount_tiers: DiscountTiers,
@@ -426,12 +249,6 @@ mod PaymentRouter {
         // Worker public keys for privacy payments
         worker_public_keys: Map<ContractAddress, ECPoint>,
 
-        // Rate limiting (per-user)
-        user_last_payment_window_start: Map<ContractAddress, u64>,
-        user_payment_count_in_window: Map<ContractAddress, u32>,
-        rate_limit_window_secs: u64,     // Rate limit window duration
-        max_payments_per_window: u32,    // Max payments allowed per window
-
         // Privacy payment randomness seed (incremented per payment)
         privacy_nonce: u256,
 
@@ -441,34 +258,6 @@ mod PaymentRouter {
         total_worker_payments: u256,
         total_staker_rewards: u256,
         total_treasury_collected: u256,
-
-        // Security: Reentrancy guard
-        reentrancy_locked: bool,
-
-        // Timelock for critical parameter changes (48 hours)
-        timelock_delay: u64,
-        pending_fee_distribution: FeeDistribution,
-        pending_fee_distribution_timestamp: u64,  // 0 means no pending change
-
-        // Oracle health requirements
-        require_healthy_oracle: bool,  // If true, payments fail when oracle is degraded
-        max_oracle_staleness: u64,     // Max age of oracle price in seconds (0 = use oracle default)
-
-        // Staked credit limits
-        staked_credit_limit_bps: u32,  // Max credit as % of staked balance (e.g., 5000 = 50%)
-
-        // Dynamic fee tiers based on monthly volume
-        dynamic_fee_tiers: DynamicFeeTiers,
-        monthly_volume_usd: u256,           // Current month's volume
-        month_start_timestamp: u64,         // When current month started
-
-        // Referral system for affiliate rewards
-        referral_system: ContractAddress,
-
-        // === UPGRADABILITY ===
-        pending_upgrade: ClassHash,
-        upgrade_scheduled_at: u64,
-        upgrade_delay: u64,
     }
 
     #[event]
@@ -480,223 +269,6 @@ mod PaymentRouter {
         PrivacyPayment: PrivacyPayment,
         FeesDistributed: FeesDistributed,
         WorkerPaid: WorkerPaid,
-        OwnershipTransferStarted: OwnershipTransferStarted,
-        OwnershipTransferred: OwnershipTransferred,
-        ContractPaused: ContractPaused,
-        ContractUnpaused: ContractUnpaused,
-        RateLimitUpdated: RateLimitUpdated,
-        DiscountTiersUpdated: DiscountTiersUpdated,
-        FeeDistributionUpdated: FeeDistributionUpdated,
-        OTCConfigUpdated: OTCConfigUpdated,
-        ObelyskRouterUpdated: ObelyskRouterUpdated,
-        StakerRewardsPoolUpdated: StakerRewardsPoolUpdated,
-        JobRegistered: JobRegistered,
-        FeeDistributionProposed: FeeDistributionProposed,
-        FeeDistributionExecuted: FeeDistributionExecuted,
-        FeeDistributionCancelled: FeeDistributionCancelled,
-        TimelockDelayUpdated: TimelockDelayUpdated,
-        EmergencyWithdrawal: EmergencyWithdrawal,
-        OracleFallbackUsed: OracleFallbackUsed,
-        OracleConfigUpdated: OracleConfigUpdated,
-        StakedCreditLimitUpdated: StakedCreditLimitUpdated,
-        DynamicFeeTiersUpdated: DynamicFeeTiersUpdated,
-        MonthlyVolumeReset: MonthlyVolumeReset,
-        UpgradeScheduled: UpgradeScheduled,
-        UpgradeExecuted: UpgradeExecuted,
-        UpgradeCancelled: UpgradeCancelled,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct DynamicFeeTiersUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        tier1_threshold: u256,
-        tier1_fee_bps: u32,
-        tier2_threshold: u256,
-        tier2_fee_bps: u32,
-        tier3_threshold: u256,
-        tier3_fee_bps: u32,
-        enabled: bool,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct MonthlyVolumeReset {
-        previous_volume: u256,
-        reset_timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct UpgradeScheduled {
-        #[key]
-        new_class_hash: ClassHash,
-        scheduled_by: ContractAddress,
-        execute_after: u64,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct UpgradeExecuted {
-        old_class_hash: ClassHash,
-        new_class_hash: ClassHash,
-        executed_by: ContractAddress,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct UpgradeCancelled {
-        cancelled_class_hash: ClassHash,
-        cancelled_by: ContractAddress,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct EmergencyWithdrawal {
-        #[key]
-        token: ContractAddress,
-        #[key]
-        recipient: ContractAddress,
-        amount: u256,
-        withdrawn_by: ContractAddress,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct OracleFallbackUsed {
-        #[key]
-        price_pair: felt252,
-        fallback_price: u256,
-        reason: felt252,      // 'stale', 'circuit_breaker', 'zero_price'
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct OracleConfigUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        require_healthy_oracle: bool,
-        max_oracle_staleness: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct StakedCreditLimitUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        old_limit_bps: u32,
-        new_limit_bps: u32,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct FeeDistributionProposed {
-        #[key]
-        proposed_by: ContractAddress,
-        worker_bps: u32,
-        protocol_fee_bps: u32,
-        executable_at: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct FeeDistributionExecuted {
-        #[key]
-        executed_by: ContractAddress,
-        worker_bps: u32,
-        protocol_fee_bps: u32,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct FeeDistributionCancelled {
-        #[key]
-        cancelled_by: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct TimelockDelayUpdated {
-        old_delay: u64,
-        new_delay: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct OwnershipTransferStarted {
-        #[key]
-        previous_owner: ContractAddress,
-        #[key]
-        new_owner: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct OwnershipTransferred {
-        #[key]
-        previous_owner: ContractAddress,
-        #[key]
-        new_owner: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct ContractPaused {
-        account: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct ContractUnpaused {
-        account: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct RateLimitUpdated {
-        window_secs: u64,
-        max_payments: u32,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct DiscountTiersUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        sage_discount_bps: u32,
-        staked_sage_discount_bps: u32,
-        privacy_credit_discount_bps: u32,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct FeeDistributionUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        worker_bps: u32,
-        protocol_fee_bps: u32,
-        burn_share_bps: u32,
-        treasury_share_bps: u32,
-        staker_share_bps: u32,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct OTCConfigUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        quote_validity_seconds: u64,
-        max_slippage_bps: u32,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct ObelyskRouterUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        old_router: ContractAddress,
-        new_router: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct StakerRewardsPoolUpdated {
-        #[key]
-        updated_by: ContractAddress,
-        old_pool: ContractAddress,
-        new_pool: ContractAddress,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct JobRegistered {
-        #[key]
-        job_id: u256,
-        #[key]
-        worker: ContractAddress,
-        privacy_enabled: bool,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -774,13 +346,6 @@ mod PaymentRouter {
         staker_rewards_pool: ContractAddress,
         treasury_address: ContractAddress
     ) {
-        assert!(!owner.is_zero(), "Router: invalid owner");
-        assert!(!sage_address.is_zero(), "Router: invalid SAGE");
-        assert!(!oracle_address.is_zero(), "Router: invalid oracle");
-        assert!(!obelysk_router.is_zero(), "Router: invalid obelysk");
-        assert!(!staker_rewards_pool.is_zero(), "Router: invalid rewards");
-        assert!(!treasury_address.is_zero(), "Router: invalid treasury");
-
         self.owner.write(owner);
         self.obelysk_router.write(obelysk_router);
         self.staker_rewards_pool.write(staker_rewards_pool);
@@ -822,34 +387,6 @@ mod PaymentRouter {
         self.discount_tiers.write(discounts);
 
         self.quote_counter.write(0);
-
-        // Initialize rate limiting: 1 hour window, 20 payments max
-        self.rate_limit_window_secs.write(3600);
-        self.max_payments_per_window.write(20);
-
-        // Initialize timelock delay (48 hours)
-        self.timelock_delay.write(DEFAULT_TIMELOCK_DELAY);
-
-        // Initialize staked credit limit (50% of staked balance)
-        self.staked_credit_limit_bps.write(5000);
-
-        // Initialize dynamic fee tiers (disabled by default, using base 20% fee)
-        // Thresholds in USD with 18 decimals
-        let dynamic_fees = DynamicFeeTiers {
-            tier1_threshold: 100000_u256 * 1000000000000000000, // $100K
-            tier1_fee_bps: 1800,  // 18%
-            tier2_threshold: 500000_u256 * 1000000000000000000, // $500K
-            tier2_fee_bps: 1500,  // 15%
-            tier3_threshold: 1000000_u256 * 1000000000000000000, // $1M
-            tier3_fee_bps: 1200,  // 12%
-            enabled: false,       // Disabled by default
-        };
-        self.dynamic_fee_tiers.write(dynamic_fees);
-        self.monthly_volume_usd.write(0);
-        self.month_start_timestamp.write(get_block_timestamp());
-
-        // Initialize upgrade delay
-        self.upgrade_delay.write(UPGRADE_DELAY);
     }
 
     #[abi(embed_v0)]
@@ -859,18 +396,9 @@ mod PaymentRouter {
             payment_token: PaymentToken,
             usd_amount: u256
         ) -> PaymentQuote {
-            // SECURITY: Validate oracle health before providing quotes
-            let (oracle_healthy, _reason) = self._validate_oracle_health();
-            assert!(oracle_healthy, "Oracle unhealthy: circuit breaker tripped");
-
             let now = get_block_timestamp();
             let config = self.otc_config.read();
             let discounts = self.discount_tiers.read();
-
-            // Get current SAGE price for slippage verification later
-            let oracle = IOracleWrapperDispatcher { contract_address: config.oracle_address };
-            let sage_price = oracle.get_price_usd(PricePair::SAGE_USD);
-            let quoted_sage_price = if sage_price == 0 { BASE_SAGE_PRICE_USD } else { sage_price };
 
             // Get discount for payment method
             let discount_bps = self._get_discount_for_token(@payment_token, @discounts);
@@ -895,7 +423,6 @@ mod PaymentRouter {
                 usd_value: usd_amount,
                 expires_at: now + config.quote_validity_seconds,
                 is_valid: true,
-                quoted_sage_price,
             }
         }
 
@@ -904,20 +431,8 @@ mod PaymentRouter {
             quote_id: u256,
             job_id: u256
         ) -> bool {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
-            // SECURITY: Pause check
-            self._when_not_paused();
-
-            // SECURITY: Validate oracle health at execution time
-            let (oracle_healthy, _reason) = self._validate_oracle_health();
-            assert!(oracle_healthy, "Oracle unhealthy: cannot execute payment");
-
             let caller = get_caller_address();
             let now = get_block_timestamp();
-
-            // SECURITY: Rate limit check
-            self._check_rate_limit(caller);
 
             // Verify quote exists and belongs to caller
             let quote = self.quotes.read(quote_id);
@@ -927,40 +442,20 @@ mod PaymentRouter {
             assert(quote_owner == caller, 'Not quote owner');
             assert(now <= quote.expires_at, 'Quote expired');
 
-            // SECURITY: Slippage protection - verify price hasn't moved too much since quote
-            let config = self.otc_config.read();
-            let oracle = IOracleWrapperDispatcher { contract_address: config.oracle_address };
-            let current_sage_price = oracle.get_price_usd(PricePair::SAGE_USD);
-            let current_price = if current_sage_price == 0 { BASE_SAGE_PRICE_USD } else { current_sage_price };
-            let quoted_price = quote.quoted_sage_price;
-
-            // Calculate price deviation in basis points
-            // deviation = |current - quoted| / quoted * 10000
-            let price_diff = if current_price > quoted_price {
-                current_price - quoted_price
-            } else {
-                quoted_price - current_price
-            };
-
-            let deviation_bps = (price_diff * 10000) / quoted_price;
-            assert!(deviation_bps <= config.max_slippage_bps.into(), "Price slippage exceeds limit");
-
-            // CHECKS-EFFECTS-INTERACTIONS pattern:
-            // 1. Mark quote as used BEFORE external calls
+            // Mark quote as used
             let mut used_quote = quote;
             used_quote.is_valid = false;
             self.quotes.write(quote_id, used_quote);
 
-            // 2. Update stats BEFORE external calls
-            let total_usd = self.total_payments_usd.read();
-            self.total_payments_usd.write(total_usd + quote.usd_value);
-
-            // 3. INTERACTIONS: External calls LAST
             // Transfer payment token from user
             self._collect_payment(caller, quote.payment_token, quote.payment_amount);
 
-            // Distribute fees in SAGE (with dynamic fee tier tracking)
-            self._distribute_fees(quote.sage_equivalent, job_id, quote.usd_value);
+            // Distribute fees in SAGE
+            self._distribute_fees(quote.sage_equivalent, job_id);
+
+            // Update stats
+            let total_usd = self.total_payments_usd.read();
+            self.total_payments_usd.write(total_usd + quote.usd_value);
 
             self.emit(PaymentExecuted {
                 quote_id,
@@ -972,9 +467,6 @@ mod PaymentRouter {
                 usd_value: quote.usd_value,
             });
 
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
-
             true
         }
 
@@ -983,35 +475,22 @@ mod PaymentRouter {
             amount: u256,
             job_id: u256
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
-            // SECURITY: Pause check
-            self._when_not_paused();
-
-            // SECURITY: Amount validation
-            assert!(amount > 0, "Amount must be greater than 0");
-
             let caller = get_caller_address();
-
-            // SECURITY: Rate limit check
-            self._check_rate_limit(caller);
-
             let discounts = self.discount_tiers.read();
 
             // Direct SAGE payment gets discount
             let effective_amount = (amount * (BPS_DENOMINATOR + discounts.sage_discount_bps.into())) / BPS_DENOMINATOR;
 
-            // CHECKS-EFFECTS-INTERACTIONS: Update stats BEFORE external calls
-            let usd_value = (amount * BASE_SAGE_PRICE_USD) / USD_DECIMALS;
-            let total_usd = self.total_payments_usd.read();
-            self.total_payments_usd.write(total_usd + usd_value);
-
-            // INTERACTIONS: External calls LAST
             // Transfer SAGE from user
             self._collect_payment(caller, PaymentToken::SAGE, amount);
 
-            // Distribute fees (with dynamic fee tier tracking)
-            self._distribute_fees(effective_amount, job_id, usd_value);
+            // Distribute fees
+            self._distribute_fees(effective_amount, job_id);
+
+            // Calculate USD value for stats
+            let usd_value = (amount * BASE_SAGE_PRICE_USD) / USD_DECIMALS;
+            let total_usd = self.total_payments_usd.read();
+            self.total_payments_usd.write(total_usd + usd_value);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -1022,9 +501,6 @@ mod PaymentRouter {
                 sage_equivalent: effective_amount,
                 usd_value,
             });
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn pay_with_staked_sage(
@@ -1032,19 +508,7 @@ mod PaymentRouter {
             usd_amount: u256,
             job_id: u256
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
-            // SECURITY: Pause check
-            self._when_not_paused();
-
-            // SECURITY: Amount validation
-            assert!(usd_amount > 0, "USD amount must be greater than 0");
-
             let caller = get_caller_address();
-
-            // SECURITY: Rate limit check
-            self._check_rate_limit(caller);
-
             let discounts = self.discount_tiers.read();
 
             // Calculate discounted amount (10% off)
@@ -1053,46 +517,20 @@ mod PaymentRouter {
             // Convert to SAGE at current price
             let sage_amount = (discounted_usd * USD_DECIMALS) / BASE_SAGE_PRICE_USD;
 
-            // SECURITY: Check staked credit limit
-            let config = self.otc_config.read();
-            let limit_bps: u256 = self.staked_credit_limit_bps.read().into();
+            // Verify user has sufficient staked balance
+            // Note: This would interact with the staking contract
             let credits_used = self.staked_credits_used.read(caller);
+            // In production: check staking contract for available balance
 
-            // If staking is configured and limit is enabled, enforce it
-            if !config.staking_address.is_zero() && limit_bps > 0 {
-                // Query actual staked balance from staking contract
-                let staking = IProverStakingDispatcher { contract_address: config.staking_address };
-                let stake_info = staking.get_stake(caller);
-
-                // Calculate maximum credit allowed based on staked amount
-                // max_credit = staked_balance * limit_bps / 10000
-                // e.g., if limit_bps = 5000 (50%), user can get credit up to 50% of stake
-                let staked_balance = stake_info.amount;
-                let max_credit = (staked_balance * limit_bps) / BPS_DENOMINATOR;
-
-                // Calculate new total credits after this payment
-                let new_total_credits = credits_used + sage_amount;
-
-                // Enforce the stake-based credit limit
-                assert!(
-                    new_total_credits <= max_credit,
-                    "Credit limit exceeded: stake more SAGE to increase limit"
-                );
-
-                // Additional safety: absolute cap to prevent extreme leverage
-                let absolute_max: u256 = 10000000_u256 * USD_DECIMALS; // 10M SAGE max credit
-                assert!(new_total_credits <= absolute_max, "Absolute credit limit exceeded");
-            }
-
-            // CHECKS-EFFECTS-INTERACTIONS: Update state BEFORE external calls
+            // Record credit usage
             self.staked_credits_used.write(caller, credits_used + sage_amount);
 
+            // Distribute fees (from protocol reserves, not user transfer)
+            self._distribute_fees(sage_amount, job_id);
+
+            // Update stats
             let total_usd = self.total_payments_usd.read();
             self.total_payments_usd.write(total_usd + usd_amount);
-
-            // INTERACTIONS: External calls LAST
-            // Distribute fees (from protocol reserves, with dynamic fee tier tracking)
-            self._distribute_fees(sage_amount, job_id, usd_amount);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -1103,9 +541,6 @@ mod PaymentRouter {
                 sage_equivalent: sage_amount,
                 usd_value: usd_amount,
             });
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn deposit_privacy_credits(
@@ -1113,15 +548,6 @@ mod PaymentRouter {
             amount: u256,
             commitment: felt252
         ) {
-            // SECURITY: Pause check
-            self._when_not_paused();
-
-            // SECURITY: Amount validation
-            assert!(amount > 0, "Amount must be greater than 0");
-
-            // SECURITY: Commitment validation (non-zero)
-            assert!(commitment != 0, "Invalid commitment");
-
             let caller = get_caller_address();
 
             // Verify commitment not already used
@@ -1146,22 +572,12 @@ mod PaymentRouter {
             nullifier: felt252,
             proof: Array<felt252>
         ) {
-            // SECURITY: Pause check
-            self._when_not_paused();
-
-            // SECURITY: Amount validation
-            assert!(usd_amount > 0, "USD amount must be greater than 0");
-
-            // SECURITY: Nullifier validation (non-zero)
-            assert!(nullifier != 0, "Invalid nullifier");
-
             // Verify nullifier not already used (prevent double-spend)
             assert(!self.privacy_nullifiers.read(nullifier), 'Nullifier used');
 
-            // Verify ZK proof structure
-            // PRODUCTION: Integrate with ProofVerifier contract for full STWO ZK verification
-            // Current implementation: basic structure validation for testnet
-            assert!(proof.len() >= 4, "Proof must have at least 4 elements");
+            // Verify ZK proof
+            // In production: call proof verifier contract
+            assert(proof.len() > 0, 'Invalid proof');
 
             // Mark nullifier as used
             self.privacy_nullifiers.write(nullifier, true);
@@ -1171,8 +587,8 @@ mod PaymentRouter {
             let discounted_usd = (usd_amount * (BPS_DENOMINATOR - discounts.privacy_credit_discount_bps.into())) / BPS_DENOMINATOR;
             let sage_amount = (discounted_usd * USD_DECIMALS) / BASE_SAGE_PRICE_USD;
 
-            // Distribute fees (from privacy pool, with dynamic fee tier tracking)
-            self._distribute_fees(sage_amount, 0, usd_amount);
+            // Distribute fees (from privacy pool)
+            self._distribute_fees(sage_amount, 0);
 
             self.emit(PrivacyPayment {
                 job_id: 0,
@@ -1202,93 +618,40 @@ mod PaymentRouter {
             assert(tiers.staked_sage_discount_bps <= 5000, 'Discount too high');
 
             self.discount_tiers.write(tiers);
-
-            self.emit(DiscountTiersUpdated {
-                updated_by: get_caller_address(),
-                sage_discount_bps: tiers.sage_discount_bps,
-                staked_sage_discount_bps: tiers.staked_sage_discount_bps,
-                privacy_credit_discount_bps: tiers.privacy_credit_discount_bps,
-            });
         }
 
-        /// Emergency-only direct fee distribution change (bypasses timelock)
-        /// Only works when contract is paused. For normal changes, use propose_fee_distribution.
         fn set_fee_distribution(ref self: ContractState, distribution: FeeDistribution) {
             self._only_owner();
 
-            // SECURITY: Only allow direct changes in emergency mode (when paused)
-            // For normal changes, use propose_fee_distribution with timelock
-            assert!(self.paused.read(), "Use propose_fee_distribution for normal changes");
-
             // Validate: worker + protocol must equal 100%
             let total_split = distribution.worker_bps + distribution.protocol_fee_bps;
-            assert!(total_split == 10000, "Worker+Protocol must be 100%");
+            assert(total_split == 10000, 'Worker+Protocol must be 100%');
 
             // Validate: protocol fee shares must sum to 100%
             let protocol_shares = distribution.burn_share_bps
                 + distribution.treasury_share_bps
                 + distribution.staker_share_bps;
-            assert!(protocol_shares == 10000, "Fee shares must sum to 100%");
+            assert(protocol_shares == 10000, 'Fee shares must sum to 100%');
 
             // Validate: worker must get at least 50% (prevent abuse)
-            assert!(distribution.worker_bps >= 5000, "Worker share too low");
+            assert(distribution.worker_bps >= 5000, 'Worker share too low');
 
             self.fee_distribution.write(distribution);
-
-            self.emit(FeeDistributionUpdated {
-                updated_by: get_caller_address(),
-                worker_bps: distribution.worker_bps,
-                protocol_fee_bps: distribution.protocol_fee_bps,
-                burn_share_bps: distribution.burn_share_bps,
-                treasury_share_bps: distribution.treasury_share_bps,
-                staker_share_bps: distribution.staker_share_bps,
-            });
         }
 
         fn set_otc_config(ref self: ContractState, config: OTCConfig) {
             self._only_owner();
             self.otc_config.write(config);
-
-            self.emit(OTCConfigUpdated {
-                updated_by: get_caller_address(),
-                quote_validity_seconds: config.quote_validity_seconds,
-                max_slippage_bps: config.max_slippage_bps,
-            });
         }
 
         fn set_obelysk_router(ref self: ContractState, router: ContractAddress) {
             self._only_owner();
-            // SECURITY: Zero address validation
-            assert!(!router.is_zero(), "Router cannot be zero address");
-
-            let old_router = self.obelysk_router.read();
             self.obelysk_router.write(router);
-
-            self.emit(ObelyskRouterUpdated {
-                updated_by: get_caller_address(),
-                old_router,
-                new_router: router,
-            });
         }
 
         fn set_staker_rewards_pool(ref self: ContractState, pool: ContractAddress) {
             self._only_owner();
-            // SECURITY: Zero address validation
-            assert!(!pool.is_zero(), "Pool cannot be zero address");
-
-            let old_pool = self.staker_rewards_pool.read();
             self.staker_rewards_pool.write(pool);
-
-            self.emit(StakerRewardsPoolUpdated {
-                updated_by: get_caller_address(),
-                old_pool,
-                new_pool: pool,
-            });
-        }
-
-        fn set_referral_system(ref self: ContractState, referral_system: ContractAddress) {
-            self._only_owner();
-            self.referral_system.write(referral_system);
         }
 
         fn register_job(
@@ -1301,17 +664,8 @@ mod PaymentRouter {
             // For now, allow owner to register jobs
             self._only_owner();
 
-            // SECURITY: Worker address validation
-            assert!(!worker.is_zero(), "Worker cannot be zero address");
-
             self.job_worker.write(job_id, worker);
             self.job_privacy_enabled.write(job_id, privacy_enabled);
-
-            self.emit(JobRegistered {
-                job_id,
-                worker,
-                privacy_enabled,
-            });
         }
 
         fn get_stats(self: @ContractState) -> (u256, u256, u256, u256, u256) {
@@ -1340,674 +694,12 @@ mod PaymentRouter {
         fn get_worker_public_key(self: @ContractState, worker: ContractAddress) -> ECPoint {
             self.worker_public_keys.read(worker)
         }
-
-        // =========================================================================
-        // Two-Step Ownership Transfer
-        // =========================================================================
-
-        fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
-            self._only_owner();
-            assert!(!new_owner.is_zero(), "New owner cannot be zero address");
-
-            let previous_owner = self.owner.read();
-            self.pending_owner.write(new_owner);
-
-            self.emit(OwnershipTransferStarted {
-                previous_owner,
-                new_owner,
-            });
-        }
-
-        fn accept_ownership(ref self: ContractState) {
-            let caller = get_caller_address();
-            let pending = self.pending_owner.read();
-            assert!(caller == pending, "Caller is not pending owner");
-
-            let previous_owner = self.owner.read();
-            let zero: ContractAddress = 0.try_into().unwrap();
-
-            self.owner.write(caller);
-            self.pending_owner.write(zero);
-
-            self.emit(OwnershipTransferred {
-                previous_owner,
-                new_owner: caller,
-            });
-        }
-
-        fn cancel_ownership_transfer(ref self: ContractState) {
-            self._only_owner();
-            let zero: ContractAddress = 0.try_into().unwrap();
-            self.pending_owner.write(zero);
-        }
-
-        fn owner(self: @ContractState) -> ContractAddress {
-            self.owner.read()
-        }
-
-        fn pending_owner(self: @ContractState) -> ContractAddress {
-            self.pending_owner.read()
-        }
-
-        // =========================================================================
-        // Pausable
-        // =========================================================================
-
-        fn pause(ref self: ContractState) {
-            self._only_owner();
-            assert!(!self.paused.read(), "Contract already paused");
-            self.paused.write(true);
-            self.emit(ContractPaused { account: get_caller_address() });
-        }
-
-        fn unpause(ref self: ContractState) {
-            self._only_owner();
-            assert!(self.paused.read(), "Contract not paused");
-            self.paused.write(false);
-            self.emit(ContractUnpaused { account: get_caller_address() });
-        }
-
-        fn is_paused(self: @ContractState) -> bool {
-            self.paused.read()
-        }
-
-        // =========================================================================
-        // Rate Limiting
-        // =========================================================================
-
-        fn set_rate_limit(ref self: ContractState, window_secs: u64, max_payments: u32) {
-            self._only_owner();
-
-            // Validate: window must be at least 1 minute
-            assert!(window_secs >= 60, "Window must be at least 60 seconds");
-            // Validate: max payments must be at least 1
-            assert!(max_payments >= 1, "Max payments must be at least 1");
-            // Validate: window cannot exceed 1 day
-            assert!(window_secs <= 86400, "Window cannot exceed 24 hours");
-            // SECURITY: Validate max payments has upper bound to prevent disabling rate limits
-            assert!(max_payments <= 1000, "Max payments cannot exceed 1000 per window");
-
-            // SECURITY: Proportional limit - max 10 payments per minute to prevent spam
-            // This ensures reasonable rate limiting regardless of window size
-            let max_proportional: u32 = ((window_secs / 60) * 10).try_into().unwrap();
-            assert!(
-                max_payments <= max_proportional,
-                "Max payments too high for window (max 10/min)"
-            );
-
-            self.rate_limit_window_secs.write(window_secs);
-            self.max_payments_per_window.write(max_payments);
-
-            self.emit(RateLimitUpdated {
-                window_secs,
-                max_payments,
-            });
-        }
-
-        fn get_rate_limit(self: @ContractState) -> (u64, u32) {
-            (self.rate_limit_window_secs.read(), self.max_payments_per_window.read())
-        }
-
-        fn get_user_payment_count(self: @ContractState, user: ContractAddress) -> u32 {
-            let now = get_block_timestamp();
-            let window_start = self.user_last_payment_window_start.read(user);
-            let window_duration = self.rate_limit_window_secs.read();
-
-            // If window has expired, count is effectively 0
-            if now >= window_start + window_duration {
-                0
-            } else {
-                self.user_payment_count_in_window.read(user)
-            }
-        }
-
-        // =========================================================================
-        // Timelock for Critical Parameter Changes
-        // =========================================================================
-
-        fn propose_fee_distribution(ref self: ContractState, distribution: FeeDistribution) {
-            self._only_owner();
-
-            // Validate: worker + protocol must equal 100%
-            let total_split = distribution.worker_bps + distribution.protocol_fee_bps;
-            assert!(total_split == 10000, "Worker+Protocol must be 100%");
-
-            // Validate: protocol fee shares must sum to 100%
-            let protocol_shares = distribution.burn_share_bps
-                + distribution.treasury_share_bps
-                + distribution.staker_share_bps;
-            assert!(protocol_shares == 10000, "Fee shares must sum to 100%");
-
-            // Validate: worker must get at least 50% (prevent abuse)
-            assert!(distribution.worker_bps >= 5000, "Worker share too low");
-
-            // Calculate execution timestamp
-            let now = get_block_timestamp();
-            let delay = self.timelock_delay.read();
-            let executable_at = now + delay;
-
-            // Store pending distribution
-            self.pending_fee_distribution.write(distribution);
-            self.pending_fee_distribution_timestamp.write(executable_at);
-
-            self.emit(FeeDistributionProposed {
-                proposed_by: get_caller_address(),
-                worker_bps: distribution.worker_bps,
-                protocol_fee_bps: distribution.protocol_fee_bps,
-                executable_at,
-            });
-        }
-
-        fn execute_fee_distribution(ref self: ContractState) {
-            self._only_owner();
-
-            let executable_at = self.pending_fee_distribution_timestamp.read();
-            assert!(executable_at > 0, "No pending fee distribution");
-
-            let now = get_block_timestamp();
-            assert!(now >= executable_at, "Timelock not expired");
-
-            // Get and apply pending distribution
-            let distribution = self.pending_fee_distribution.read();
-            self.fee_distribution.write(distribution);
-
-            // Clear pending state
-            self.pending_fee_distribution_timestamp.write(0);
-
-            self.emit(FeeDistributionExecuted {
-                executed_by: get_caller_address(),
-                worker_bps: distribution.worker_bps,
-                protocol_fee_bps: distribution.protocol_fee_bps,
-            });
-
-            // Also emit the standard update event for consistency
-            self.emit(FeeDistributionUpdated {
-                updated_by: get_caller_address(),
-                worker_bps: distribution.worker_bps,
-                protocol_fee_bps: distribution.protocol_fee_bps,
-                burn_share_bps: distribution.burn_share_bps,
-                treasury_share_bps: distribution.treasury_share_bps,
-                staker_share_bps: distribution.staker_share_bps,
-            });
-        }
-
-        fn cancel_fee_distribution(ref self: ContractState) {
-            self._only_owner();
-
-            let executable_at = self.pending_fee_distribution_timestamp.read();
-            assert!(executable_at > 0, "No pending fee distribution");
-
-            // Clear pending state
-            self.pending_fee_distribution_timestamp.write(0);
-
-            self.emit(FeeDistributionCancelled {
-                cancelled_by: get_caller_address(),
-            });
-        }
-
-        fn get_pending_fee_distribution(self: @ContractState) -> (FeeDistribution, u64) {
-            (self.pending_fee_distribution.read(), self.pending_fee_distribution_timestamp.read())
-        }
-
-        fn get_timelock_delay(self: @ContractState) -> u64 {
-            self.timelock_delay.read()
-        }
-
-        fn set_timelock_delay(ref self: ContractState, delay: u64) {
-            self._only_owner();
-
-            // Validate: delay must be within bounds
-            assert!(delay >= MIN_TIMELOCK_DELAY, "Delay too short");
-            assert!(delay <= MAX_TIMELOCK_DELAY, "Delay too long");
-
-            let old_delay = self.timelock_delay.read();
-            self.timelock_delay.write(delay);
-
-            self.emit(TimelockDelayUpdated {
-                old_delay,
-                new_delay: delay,
-            });
-        }
-
-        // =========================================================================
-        // Emergency Withdrawal
-        // =========================================================================
-
-        fn emergency_withdraw(
-            ref self: ContractState,
-            token: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256
-        ) {
-            self._only_owner();
-
-            // SECURITY: Only allow emergency withdrawal when contract is paused
-            assert!(self.paused.read(), "Contract must be paused for emergency withdrawal");
-
-            // Validate recipient
-            assert!(!recipient.is_zero(), "Invalid recipient");
-
-            // Validate amount
-            assert!(amount > 0, "Amount must be greater than 0");
-
-            // Transfer tokens
-            let token_dispatcher = IERC20Dispatcher { contract_address: token };
-            let success = token_dispatcher.transfer(recipient, amount);
-            assert!(success, "Emergency withdrawal transfer failed");
-
-            self.emit(EmergencyWithdrawal {
-                token,
-                recipient,
-                amount,
-                withdrawn_by: get_caller_address(),
-                timestamp: get_block_timestamp(),
-            });
-        }
-
-        fn get_treasury_balances(self: @ContractState) -> (u256, u256, u256, u256) {
-            (
-                self.treasury_usdc.read(),
-                self.treasury_strk.read(),
-                self.treasury_wbtc.read(),
-                self.treasury_sage.read()
-            )
-        }
-
-        // =========================================================================
-        // Oracle Health Configuration
-        // =========================================================================
-
-        fn set_oracle_requirements(
-            ref self: ContractState,
-            require_healthy: bool,
-            max_staleness: u64
-        ) {
-            self._only_owner();
-
-            // Validate: staleness should be reasonable (0 = use oracle default, max 24 hours)
-            assert!(max_staleness <= 86400, "Staleness cannot exceed 24 hours");
-
-            self.require_healthy_oracle.write(require_healthy);
-            self.max_oracle_staleness.write(max_staleness);
-
-            self.emit(OracleConfigUpdated {
-                updated_by: get_caller_address(),
-                require_healthy_oracle: require_healthy,
-                max_oracle_staleness: max_staleness,
-            });
-        }
-
-        fn get_oracle_requirements(self: @ContractState) -> (bool, u64) {
-            (self.require_healthy_oracle.read(), self.max_oracle_staleness.read())
-        }
-
-        // =========================================================================
-        // Staked Credit Limits
-        // =========================================================================
-
-        fn set_staked_credit_limit(ref self: ContractState, limit_bps: u32) {
-            self._only_owner();
-
-            // Validate: limit must be between 0 and 100%
-            assert!(limit_bps <= 10000, "Limit cannot exceed 100%");
-
-            let old_limit = self.staked_credit_limit_bps.read();
-            self.staked_credit_limit_bps.write(limit_bps);
-
-            self.emit(StakedCreditLimitUpdated {
-                updated_by: get_caller_address(),
-                old_limit_bps: old_limit,
-                new_limit_bps: limit_bps,
-            });
-        }
-
-        fn get_staked_credit_limit(self: @ContractState) -> u32 {
-            self.staked_credit_limit_bps.read()
-        }
-
-        fn get_available_staked_credit(self: @ContractState, user: ContractAddress) -> u256 {
-            let config = self.otc_config.read();
-            let limit_bps: u256 = self.staked_credit_limit_bps.read().into();
-
-            // If staking not configured or limit is 0, no credit available
-            if config.staking_address.is_zero() || limit_bps == 0 {
-                return 0;
-            }
-
-            // Query user's staked balance from staking contract
-            let staking = IProverStakingDispatcher { contract_address: config.staking_address };
-            let stake_info = staking.get_stake(user);
-            let staked_balance = stake_info.amount;
-
-            // Calculate maximum credit allowed based on staked amount
-            // max_credit = staked_balance * limit_bps / 10000
-            let max_credit = (staked_balance * limit_bps) / BPS_DENOMINATOR;
-
-            // Get credits already used
-            let credits_used = self.staked_credits_used.read(user);
-
-            // Available credit = max_credit - credits_used
-            if max_credit > credits_used {
-                max_credit - credits_used
-            } else {
-                0
-            }
-        }
-
-        // =========================================================================
-        // Dynamic Fee Tiers
-        // =========================================================================
-
-        fn set_dynamic_fee_tiers(ref self: ContractState, tiers: DynamicFeeTiers) {
-            self._only_owner();
-
-            // Validate: fees must be reasonable (between 5% and 25%)
-            assert!(tiers.tier1_fee_bps >= 500 && tiers.tier1_fee_bps <= 2500, "Tier1 fee out of range");
-            assert!(tiers.tier2_fee_bps >= 500 && tiers.tier2_fee_bps <= 2500, "Tier2 fee out of range");
-            assert!(tiers.tier3_fee_bps >= 500 && tiers.tier3_fee_bps <= 2500, "Tier3 fee out of range");
-
-            // Validate: higher tiers should have lower fees
-            assert!(tiers.tier2_fee_bps <= tiers.tier1_fee_bps, "Tier2 fee must be <= Tier1");
-            assert!(tiers.tier3_fee_bps <= tiers.tier2_fee_bps, "Tier3 fee must be <= Tier2");
-
-            // Validate: thresholds must be increasing
-            assert!(tiers.tier2_threshold > tiers.tier1_threshold, "Tier2 threshold must be > Tier1");
-            assert!(tiers.tier3_threshold > tiers.tier2_threshold, "Tier3 threshold must be > Tier2");
-
-            self.dynamic_fee_tiers.write(tiers);
-
-            self.emit(DynamicFeeTiersUpdated {
-                updated_by: get_caller_address(),
-                tier1_threshold: tiers.tier1_threshold,
-                tier1_fee_bps: tiers.tier1_fee_bps,
-                tier2_threshold: tiers.tier2_threshold,
-                tier2_fee_bps: tiers.tier2_fee_bps,
-                tier3_threshold: tiers.tier3_threshold,
-                tier3_fee_bps: tiers.tier3_fee_bps,
-                enabled: tiers.enabled,
-            });
-        }
-
-        fn get_dynamic_fee_tiers(self: @ContractState) -> DynamicFeeTiers {
-            self.dynamic_fee_tiers.read()
-        }
-
-        fn get_current_protocol_fee(self: @ContractState) -> u32 {
-            let tiers = self.dynamic_fee_tiers.read();
-
-            // If dynamic fees disabled, return base fee from fee_distribution
-            if !tiers.enabled {
-                return self.fee_distribution.read().protocol_fee_bps;
-            }
-
-            // Check if we need to conceptually reset the month
-            // (actual reset happens on next payment, but for query we use current volume)
-            let now = get_block_timestamp();
-            let month_start = self.month_start_timestamp.read();
-            let current_volume = if now >= month_start + 2592000 { // 30 days in seconds
-                0 // New month, volume resets
-            } else {
-                self.monthly_volume_usd.read()
-            };
-
-            // Determine fee based on volume tier
-            if current_volume >= tiers.tier3_threshold {
-                tiers.tier3_fee_bps
-            } else if current_volume >= tiers.tier2_threshold {
-                tiers.tier2_fee_bps
-            } else if current_volume >= tiers.tier1_threshold {
-                tiers.tier1_fee_bps
-            } else {
-                // Below tier1, use base fee
-                self.fee_distribution.read().protocol_fee_bps
-            }
-        }
-
-        fn get_monthly_volume(self: @ContractState) -> u256 {
-            let now = get_block_timestamp();
-            let month_start = self.month_start_timestamp.read();
-
-            // Check if month has rolled over
-            if now >= month_start + 2592000 { // 30 days in seconds
-                0 // New month, volume is 0
-            } else {
-                self.monthly_volume_usd.read()
-            }
-        }
-
-        // =========================================================================
-        // Upgradability Functions
-        // =========================================================================
-
-        /// Schedule a contract upgrade with timelock delay
-        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
-            self._only_owner();
-
-            let now = get_block_timestamp();
-            let delay = self.upgrade_delay.read();
-            let execute_after = now + delay;
-
-            // Ensure no upgrade is already pending
-            let pending = self.pending_upgrade.read();
-            let zero_hash: ClassHash = 0.try_into().unwrap();
-            assert!(pending == zero_hash, "Upgrade already pending");
-
-            // Schedule the upgrade
-            self.pending_upgrade.write(new_class_hash);
-            self.upgrade_scheduled_at.write(now);
-
-            self.emit(UpgradeScheduled {
-                new_class_hash,
-                scheduled_by: get_caller_address(),
-                execute_after,
-                timestamp: now,
-            });
-        }
-
-        /// Execute a scheduled upgrade after timelock has passed
-        fn execute_upgrade(ref self: ContractState) {
-            self._only_owner();
-
-            let now = get_block_timestamp();
-            let pending = self.pending_upgrade.read();
-            let scheduled_at = self.upgrade_scheduled_at.read();
-            let delay = self.upgrade_delay.read();
-
-            // Verify there's a pending upgrade
-            let zero_hash: ClassHash = 0.try_into().unwrap();
-            assert!(pending != zero_hash, "No pending upgrade");
-
-            // Verify timelock has passed
-            assert!(now >= scheduled_at + delay, "Timelock not expired");
-
-            // Get current class hash for event
-            let old_class_hash = starknet::syscalls::get_class_hash_at_syscall(
-                get_contract_address()
-            ).unwrap_syscall();
-
-            // Clear pending upgrade state
-            self.pending_upgrade.write(zero_hash);
-            self.upgrade_scheduled_at.write(0);
-
-            // Emit event before upgrade
-            self.emit(UpgradeExecuted {
-                old_class_hash,
-                new_class_hash: pending,
-                executed_by: get_caller_address(),
-                timestamp: now,
-            });
-
-            // Execute the upgrade using replace_class syscall
-            starknet::syscalls::replace_class_syscall(pending).unwrap_syscall();
-        }
-
-        /// Cancel a scheduled upgrade
-        fn cancel_upgrade(ref self: ContractState) {
-            self._only_owner();
-
-            let pending = self.pending_upgrade.read();
-            let zero_hash: ClassHash = 0.try_into().unwrap();
-
-            // Verify there's a pending upgrade to cancel
-            assert!(pending != zero_hash, "No pending upgrade");
-
-            // Clear pending upgrade
-            self.pending_upgrade.write(zero_hash);
-            self.upgrade_scheduled_at.write(0);
-
-            self.emit(UpgradeCancelled {
-                cancelled_class_hash: pending,
-                cancelled_by: get_caller_address(),
-                timestamp: get_block_timestamp(),
-            });
-        }
-
-        /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
-        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64, u64) {
-            let pending = self.pending_upgrade.read();
-            let scheduled_at = self.upgrade_scheduled_at.read();
-            let delay = self.upgrade_delay.read();
-            let execute_after = if scheduled_at > 0 { scheduled_at + delay } else { 0 };
-
-            (pending, scheduled_at, execute_after, delay)
-        }
     }
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        // =========================================================================
-        // Reentrancy Guard - Prevents reentrant calls to critical functions
-        // =========================================================================
-        fn _reentrancy_guard_start(ref self: ContractState) {
-            assert(!self.reentrancy_locked.read(), 'ReentrancyGuard: reentrant call');
-            self.reentrancy_locked.write(true);
-        }
-
-        fn _reentrancy_guard_end(ref self: ContractState) {
-            self.reentrancy_locked.write(false);
-        }
-
         fn _only_owner(self: @ContractState) {
             assert(get_caller_address() == self.owner.read(), 'Only owner');
-        }
-
-        fn _when_not_paused(self: @ContractState) {
-            assert!(!self.paused.read(), "Contract is paused");
-        }
-
-        /// Validate oracle health before using prices
-        /// Returns (is_healthy, reason) where reason is empty if healthy
-        fn _validate_oracle_health(self: @ContractState) -> (bool, felt252) {
-            let config = self.otc_config.read();
-            let require_healthy = self.require_healthy_oracle.read();
-
-            // If not requiring healthy oracle, skip validation
-            if !require_healthy {
-                return (true, 0);
-            }
-
-            let oracle = IOracleWrapperDispatcher { contract_address: config.oracle_address };
-
-            // Check if circuit breaker is tripped
-            let circuit_breaker_tripped = oracle.is_circuit_breaker_tripped();
-            if circuit_breaker_tripped {
-                return (false, 'circuit_breaker');
-            }
-
-            // Check oracle config for staleness settings
-            let oracle_config = oracle.get_config();
-            let max_staleness = self.max_oracle_staleness.read();
-
-            // If we have a custom staleness requirement, check it
-            // The actual staleness check happens when we get the price
-            // Here we just validate the oracle is properly configured
-            if max_staleness > 0 && oracle_config.max_price_age > max_staleness {
-                // Oracle's internal staleness check is more lenient than our requirement
-                // This is a warning but not necessarily a failure
-                return (true, 0);
-            }
-
-            (true, 0)
-        }
-
-        /// Check and update rate limit for a user
-        /// Reverts if rate limit exceeded, otherwise increments the counter
-        fn _check_rate_limit(ref self: ContractState, user: ContractAddress) {
-            let now = get_block_timestamp();
-            let window_start = self.user_last_payment_window_start.read(user);
-            let window_duration = self.rate_limit_window_secs.read();
-            let max_payments = self.max_payments_per_window.read();
-
-            // Skip rate limiting if not configured (max_payments = 0)
-            if max_payments == 0 {
-                return;
-            }
-
-            // Check if we're in a new window
-            if now >= window_start + window_duration {
-                // Start a new window
-                self.user_last_payment_window_start.write(user, now);
-                self.user_payment_count_in_window.write(user, 1);
-            } else {
-                // Within current window - check limit
-                let current_count = self.user_payment_count_in_window.read(user);
-                assert!(current_count < max_payments, "Rate limit exceeded");
-
-                // Increment counter
-                self.user_payment_count_in_window.write(user, current_count + 1);
-            }
-        }
-
-        /// Update monthly volume tracking and reset if new month
-        /// Returns the current protocol fee after considering dynamic tiers
-        fn _update_monthly_volume_and_get_fee(ref self: ContractState, usd_amount: u256) -> u32 {
-            let now = get_block_timestamp();
-            let month_start = self.month_start_timestamp.read();
-            let tiers = self.dynamic_fee_tiers.read();
-
-            // Check if we need to reset for new month (30 days = 2592000 seconds)
-            let current_volume = if now >= month_start + 2592000 {
-                // New month - reset volume and timestamp
-                let old_volume = self.monthly_volume_usd.read();
-                self.month_start_timestamp.write(now);
-                self.monthly_volume_usd.write(usd_amount);
-
-                self.emit(MonthlyVolumeReset {
-                    previous_volume: old_volume,
-                    reset_timestamp: now,
-                });
-
-                usd_amount
-            } else {
-                // Same month - add to existing volume
-                let existing = self.monthly_volume_usd.read();
-                let new_volume = existing + usd_amount;
-                self.monthly_volume_usd.write(new_volume);
-                new_volume
-            };
-
-            // If dynamic fees disabled, return base fee
-            if !tiers.enabled {
-                return self.fee_distribution.read().protocol_fee_bps;
-            }
-
-            // Determine fee based on volume tier (use volume BEFORE this payment for fairness)
-            let volume_for_tier = if current_volume > usd_amount {
-                current_volume - usd_amount
-            } else {
-                0
-            };
-
-            if volume_for_tier >= tiers.tier3_threshold {
-                tiers.tier3_fee_bps
-            } else if volume_for_tier >= tiers.tier2_threshold {
-                tiers.tier2_fee_bps
-            } else if volume_for_tier >= tiers.tier1_threshold {
-                tiers.tier1_fee_bps
-            } else {
-                // Below tier1, use base fee
-                self.fee_distribution.read().protocol_fee_bps
-            }
         }
 
         fn _get_discount_for_token(
@@ -2133,12 +825,10 @@ mod PaymentRouter {
 
         /// Distribute payment: 80% to worker, 20% protocol fee (70% burn, 20% treasury, 10% stakers)
         /// All payments flow through Obelysk in SAGE, with optional privacy
-        /// Now supports dynamic fee tiers based on monthly volume
         fn _distribute_fees(
             ref self: ContractState,
             sage_amount: u256,
-            job_id: u256,
-            usd_value: u256
+            job_id: u256
         ) {
             let fee_dist = self.fee_distribution.read();
             let config = self.otc_config.read();
@@ -2147,23 +837,18 @@ mod PaymentRouter {
             let sage_token = ISAGETokenDispatcher { contract_address: config.sage_address };
             let sage_erc20 = IERC20Dispatcher { contract_address: config.sage_address };
 
-            // Step 1: Update volume tracking and get dynamic protocol fee
-            let dynamic_protocol_fee_bps = self._update_monthly_volume_and_get_fee(usd_value);
+            // Step 1: Calculate worker share (80%)
+            let worker_amount = (sage_amount * fee_dist.worker_bps.into()) / BPS_DENOMINATOR;
 
-            // Step 2: Calculate worker share using dynamic fee
-            // worker_bps = 10000 - protocol_fee_bps (worker always gets the remainder)
-            let worker_bps: u256 = 10000 - dynamic_protocol_fee_bps.into();
-            let worker_amount = (sage_amount * worker_bps) / BPS_DENOMINATOR;
-
-            // Step 3: Calculate protocol fee using dynamic rate
+            // Step 2: Calculate protocol fee (20%)
             let protocol_fee = sage_amount - worker_amount;
 
-            // Step 4: Split protocol fee (70% burn, 20% treasury, 10% stakers)
+            // Step 3: Split protocol fee (70% burn, 20% treasury, 10% stakers)
             let burn_amount = (protocol_fee * fee_dist.burn_share_bps.into()) / BPS_DENOMINATOR;
             let treasury_amount = (protocol_fee * fee_dist.treasury_share_bps.into()) / BPS_DENOMINATOR;
             let staker_amount = protocol_fee - burn_amount - treasury_amount;
 
-            // Step 5: Pay worker via Obelysk (with optional privacy)
+            // Step 4: Pay worker via Obelysk (with optional privacy)
             let worker = self.job_worker.read(job_id);
             let privacy_enabled = self.job_privacy_enabled.read(job_id);
 
@@ -2218,9 +903,9 @@ mod PaymentRouter {
                 });
             }
 
-            // Step 6: Execute protocol fee distribution
+            // Step 5: Execute protocol fee distribution
 
-            // 6a: Burn tokens (70% of protocol fee)
+            // 5a: Burn tokens (70% of protocol fee)
             // Use burn_from_revenue with protocol fee as revenue source
             if burn_amount > 0 {
                 // revenue_source = protocol_fee in USD value (estimated)
@@ -2235,14 +920,14 @@ mod PaymentRouter {
                 sage_token.burn_from_revenue(burn_amount, burn_usd_value, execution_price);
             }
 
-            // 6b: Transfer to staker rewards pool (10% of protocol fee)
+            // 5b: Transfer to staker rewards pool (10% of protocol fee)
             let staker_pool = self.staker_rewards_pool.read();
             if !staker_pool.is_zero() && staker_amount > 0 {
                 let success = sage_erc20.transfer(staker_pool, staker_amount);
                 assert(success, 'Staker transfer failed');
             }
 
-            // 6c: Transfer to treasury (20% of protocol fee)
+            // 5c: Transfer to treasury (20% of protocol fee)
             let treasury = self.treasury_address.read();
             if !treasury.is_zero() && treasury_amount > 0 {
                 let success = sage_erc20.transfer(treasury, treasury_amount);
@@ -2271,28 +956,6 @@ mod PaymentRouter {
                 to_stakers: staker_amount,
                 timestamp: get_block_timestamp(),
             });
-
-            // Record trade with referral system for the payer
-            // This rewards referrers when their referred users make payments
-            self._record_referral_payment(get_caller_address(), usd_value, protocol_fee, config.sage_address);
-        }
-
-        /// Record payment with referral system if configured
-        fn _record_referral_payment(
-            ref self: ContractState,
-            payer: ContractAddress,
-            volume_usd: u256,
-            fee_amount: u256,
-            fee_token: ContractAddress
-        ) {
-            let referral_addr = self.referral_system.read();
-            if referral_addr.is_zero() {
-                return;  // Referral system not configured
-            }
-
-            // Call referral system to record payment and distribute rewards
-            let referral = IReferralSystemDispatcher { contract_address: referral_addr };
-            referral.record_trade(payer, volume_usd, fee_amount, fee_token);
         }
 
         fn _token_to_felt(self: @ContractState, token: PaymentToken) -> felt252 {

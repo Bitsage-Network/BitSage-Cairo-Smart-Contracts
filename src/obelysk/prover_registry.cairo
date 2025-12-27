@@ -140,7 +140,7 @@ pub mod ObelyskProverRegistry {
         TeeAttestation, ProverInfo, PricingConfig, ProofRequest, 
         IObelyskProverRegistry
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
+    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess,
         StoragePointerReadAccess, StoragePointerWriteAccess
@@ -148,7 +148,6 @@ pub mod ObelyskProverRegistry {
     use core::array::ArrayTrait;
     use core::option::OptionTrait;
     use core::traits::Into;
-    use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 
     // =========================================================================
     // Storage
@@ -407,20 +406,17 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             let mut info = self.provers.read(caller);
             assert(info.is_active, 'Prover not registered');
-            assert(amount > 0, 'Amount must be positive');
-
-            // Transfer SAGE tokens from caller to contract
-            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            let transfer_success = sage_token.transfer_from(caller, get_contract_address(), amount);
-            assert(transfer_success, 'Stake transfer failed');
-
+            
             let new_total = info.stake + amount;
             info.stake = new_total;
             self.provers.write(caller, info);
-
-            self.emit(ProverStaked {
-                prover: caller,
-                amount,
+            
+            // TODO: Transfer SAGE tokens from caller to contract
+            // ICiroToken::transfer_from(self.sage_token.read(), caller, contract_address, amount)
+            
+            self.emit(ProverStaked { 
+                prover: caller, 
+                amount, 
                 total_stake: new_total,
             });
         }
@@ -429,20 +425,17 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             let mut info = self.provers.read(caller);
             assert(info.stake >= amount, 'Insufficient stake');
-            assert(amount > 0, 'Amount must be positive');
-
+            
             let remaining = info.stake - amount;
             info.stake = remaining;
             self.provers.write(caller, info);
-
-            // Transfer SAGE tokens back to prover
-            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            let transfer_success = sage_token.transfer(caller, amount);
-            assert(transfer_success, 'Unstake transfer failed');
-
-            self.emit(ProverUnstaked {
-                prover: caller,
-                amount,
+            
+            // TODO: Transfer SAGE tokens back to prover
+            // ICiroToken::transfer(self.sage_token.read(), caller, amount)
+            
+            self.emit(ProverUnstaked { 
+                prover: caller, 
+                amount, 
                 remaining_stake: remaining,
             });
         }
@@ -457,16 +450,10 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             let price = self.get_proof_price(proof_size_log);
             assert(price <= max_price, 'Price exceeds max');
-            assert(price > 0, 'Invalid price');
-
-            // Lock SAGE payment from client (escrow until proof completion)
-            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            let transfer_success = sage_token.transfer_from(caller, get_contract_address(), price);
-            assert(transfer_success, 'Payment transfer failed');
-
+            
             let request_id = self.next_request_id.read();
             self.next_request_id.write(request_id + 1);
-
+            
             let zero_address: ContractAddress = 0.try_into().unwrap();
             let request = ProofRequest {
                 client: caller,
@@ -476,16 +463,19 @@ pub mod ObelyskProverRegistry {
                 status: 0, // pending
                 created_at: get_block_timestamp(),
             };
-
+            
             self.proof_requests.write(request_id, request);
-
-            self.emit(ProofRequested {
-                request_id,
-                client: caller,
-                proof_size_log,
+            
+            // TODO: Lock SAGE payment from client
+            // ICiroToken::transfer_from(self.sage_token.read(), caller, contract_address, price)
+            
+            self.emit(ProofRequested { 
+                request_id, 
+                client: caller, 
+                proof_size_log, 
                 price,
             });
-
+            
             request_id
         }
 
@@ -496,64 +486,49 @@ pub mod ObelyskProverRegistry {
         ) {
             let caller = get_caller_address();
             let mut request = self.proof_requests.read(request_id);
-
+            
             assert(request.status == 0 || request.status == 1, 'Invalid request status');
-
+            
             // Verify prover is registered and staked
             let prover_info = self.provers.read(caller);
             assert(prover_info.is_active, 'Prover not active');
-
+            
             let pricing = self.pricing.read();
             assert(prover_info.stake >= pricing.min_stake, 'Insufficient stake');
-
-            // Verify proof commitment is non-zero (basic validation)
-            assert(proof_commitment != 0, 'Invalid proof commitment');
-
-            // Note: In production, integrate with stwo-cairo-verifier:
-            // let verifier = IStwoVerifierDispatcher { contract_address: self.verifier_address.read() };
-            // let verified = verifier.verify(proof_commitment);
+            
+            // TODO: Call stwo-cairo-verifier to verify proof
+            // let verifier = self.verifier_address.read();
+            // let verified = IStwoVerifier::verify(verifier, proof_commitment);
             // assert(verified, 'Proof verification failed');
-
+            
             self.emit(ProofSubmitted { request_id, prover: caller });
-
-            // Update request status
+            
+            // Update request
             request.assigned_prover = caller;
             request.status = 2; // completed
             self.proof_requests.write(request_id, request);
-
+            
             // Update prover stats
             let mut info = self.provers.read(caller);
             info.proofs_generated = info.proofs_generated + 1;
-
+            
             // Increase reputation on success (capped at 10000)
             let old_rep = info.reputation;
             let new_rep = if old_rep < 9900 { old_rep + 100 } else { 10000 };
             info.reputation = new_rep;
-
+            
             self.provers.write(caller, info);
-
-            // Calculate and distribute payment
-            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            let platform_fee_bps: u256 = pricing.platform_fee_bps.into();
-            let platform_fee = (request.price * platform_fee_bps) / 10000;
-            let prover_payment = request.price - platform_fee;
-
-            // Pay prover their share
-            if prover_payment > 0 {
-                let prover_transfer = sage_token.transfer(caller, prover_payment);
-                assert(prover_transfer, 'Prover payment failed');
-            }
-
-            // Send platform fee to treasury
-            if platform_fee > 0 {
-                let treasury_transfer = sage_token.transfer(self.treasury.read(), platform_fee);
-                assert(treasury_transfer, 'Treasury payment failed');
-            }
-
+            
+            // TODO: Pay prover (minus platform fee)
+            // let platform_fee = request.price * pricing.platform_fee_bps / 10000;
+            // let prover_payment = request.price - platform_fee;
+            // ICiroToken::transfer(self.sage_token.read(), caller, prover_payment)
+            // ICiroToken::transfer(self.sage_token.read(), self.treasury.read(), platform_fee)
+            
             self.emit(ProofVerified { request_id, success: true, prover: caller });
-            self.emit(ReputationUpdated {
-                prover: caller,
-                old_reputation: old_rep,
+            self.emit(ReputationUpdated { 
+                prover: caller, 
+                old_reputation: old_rep, 
                 new_reputation: new_rep,
             });
         }

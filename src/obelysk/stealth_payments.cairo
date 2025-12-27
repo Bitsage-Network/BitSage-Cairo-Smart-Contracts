@@ -204,29 +204,83 @@ pub fn derive_stealth_spending_key(
     spending_key + shared_secret_scalar
 }
 
-/// Verify that a stealth address matches expected derivation
+/// Verify that a stealth address matches expected derivation (PUBLIC verification)
 /// @param meta_address: Worker's meta-address
 /// @param ephemeral_pubkey: R from the announcement
 /// @param claimed_stealth_address: The address being verified
-/// @return true if the stealth address is correctly derived
+/// @return true if basic sanity checks pass
+///
+/// NOTE: Full cryptographic verification is NOT possible without the viewing key.
+/// This function only validates structural correctness. For full verification:
+/// - Use `verify_stealth_address_with_viewing_key` if you have the viewing key
+/// - Otherwise, rely on spending proof verification during claim
 pub fn verify_stealth_address(
     meta_address: StealthMetaAddress,
     ephemeral_pubkey: ECPoint,
     claimed_stealth_address: felt252
 ) -> bool {
-    // Re-derive the stealth address
-    // We need to use the sender's ephemeral secret, but we only have R
-    // Instead, we verify using the recipient's viewing key
+    // Sanity check 1: Stealth address must be non-zero
+    if claimed_stealth_address == 0 {
+        return false;
+    }
 
-    // This function is for public verification - anyone can check
-    // that a stealth address was correctly derived from a meta-address
+    // Sanity check 2: Ephemeral pubkey must be non-zero (valid point)
+    if is_point_zero(ephemeral_pubkey) {
+        return false;
+    }
 
-    // Note: This requires the ephemeral secret which only sender has
-    // For public verification, we use a different approach (see contract)
+    // Sanity check 3: Meta-address must have valid public keys
+    if is_point_zero(meta_address.spending_pubkey) {
+        return false;
+    }
+    if is_point_zero(meta_address.viewing_pubkey) {
+        return false;
+    }
 
-    // For now, return true as placeholder - actual verification
-    // happens during claim with spending proof
+    // Sanity check 4: Scheme must be supported
+    if meta_address.scheme_id != 1 {
+        return false;
+    }
+
+    // All sanity checks passed
+    // Full cryptographic verification happens during claim with spending proof
     true
+}
+
+/// Verify stealth address with viewing key (FULL cryptographic verification)
+/// @param meta_address: Worker's meta-address
+/// @param viewing_key: Worker's viewing secret key (must be kept private)
+/// @param ephemeral_pubkey: R from the announcement
+/// @param claimed_stealth_address: The address being verified
+/// @return true if the stealth address was correctly derived
+pub fn verify_stealth_address_with_viewing_key(
+    meta_address: StealthMetaAddress,
+    viewing_key: felt252,
+    ephemeral_pubkey: ECPoint,
+    claimed_stealth_address: felt252
+) -> bool {
+    let g = generator();
+
+    // Step 1: Compute shared secret S = vk * R
+    let shared_secret_point = ec_mul(viewing_key, ephemeral_pubkey);
+
+    // Step 2: Derive the expected stealth public key
+    // PK_stealth = PK_spend + H(S) * G
+    let shared_secret_scalar = hash_point_to_scalar(shared_secret_point);
+    let offset_point = ec_mul(shared_secret_scalar, g);
+    let expected_stealth_pubkey = ec_add(meta_address.spending_pubkey, offset_point);
+
+    // Step 3: Convert to address
+    let expected_stealth_address = pubkey_to_address(expected_stealth_pubkey);
+
+    // Step 4: Verify match
+    expected_stealth_address == claimed_stealth_address
+}
+
+/// Check if an EC point is the zero point
+fn is_point_zero(point: ECPoint) -> bool {
+    // A point is zero if both coordinates are zero
+    point.x == 0 && point.y == 0
 }
 
 /// Create a spending proof for claiming a stealth payment

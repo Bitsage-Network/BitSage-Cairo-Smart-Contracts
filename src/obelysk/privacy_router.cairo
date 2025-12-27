@@ -14,7 +14,7 @@
 
 use starknet::ContractAddress;
 use sage_contracts::obelysk::elgamal::{
-    ECPoint, ElGamalCiphertext, EncryptedBalance,
+    ECPoint, ElGamalCiphertext, EncryptedBalance, PublicKey,
     EncryptionProof, TransferProof
 };
 
@@ -125,27 +125,6 @@ pub trait IPrivacyRouter<TContractState> {
 
     /// Admin: Pause/unpause for emergencies
     fn set_paused(ref self: TContractState, paused: bool);
-
-    // =========================================================================
-    // Stealth Payment Integration
-    // =========================================================================
-
-    /// Admin: Set stealth registry address for address masking
-    fn set_stealth_registry(ref self: TContractState, registry: ContractAddress);
-
-    /// Get stealth registry address
-    fn get_stealth_registry(self: @TContractState) -> ContractAddress;
-
-    /// Send worker payment via stealth address
-    /// Combines amount privacy (ElGamal) with address privacy (stealth)
-    fn send_stealth_worker_payment(
-        ref self: TContractState,
-        job_id: u256,
-        worker: ContractAddress,
-        sage_amount: u256,
-        ephemeral_secret: felt252,
-        encryption_randomness: felt252
-    );
 }
 
 #[starknet::contract]
@@ -154,19 +133,12 @@ mod PrivacyRouter {
         IPrivacyRouter, PrivateAccount, PrivateTransfer, PrivateWorkerPayment
     };
     use sage_contracts::obelysk::elgamal::{
-        ECPoint, ElGamalCiphertext, EncryptedBalance,
-        EncryptionProof,
+        ECPoint, ElGamalCiphertext, EncryptedBalance, PublicKey,
+        EncryptionProof, TransferProof,
         ec_zero, is_zero, zero_ciphertext, homomorphic_add, homomorphic_sub,
-        verify_ciphertext, rollup_balance,
-        get_c1, get_c2, get_commitment,
-        // Production Sigma protocol verification
-        ec_add, ec_mul, ec_sub, generator, pedersen_commit,
+        verify_ciphertext, encrypt, hash_points, rollup_balance,
+        get_c1, get_c2, get_commitment
     };
-    // Stealth payment integration
-    use sage_contracts::obelysk::stealth_registry::{
-        IStealthRegistryDispatcher, IStealthRegistryDispatcherTrait
-    };
-    use core::poseidon::poseidon_hash_span;
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
@@ -207,12 +179,6 @@ mod PrivacyRouter {
 
         // Emergency controls
         paused: bool,
-
-        // Security: Reentrancy guard
-        reentrancy_locked: bool,
-
-        // Stealth payment integration
-        stealth_registry: ContractAddress,
     }
 
     #[event]
@@ -225,7 +191,6 @@ mod PrivacyRouter {
         WorkerPaymentReceived: WorkerPaymentReceived,
         WorkerPaymentClaimed: WorkerPaymentClaimed,
         EpochAdvanced: EpochAdvanced,
-        StealthWorkerPaymentSent: StealthWorkerPaymentSent,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -287,17 +252,6 @@ mod PrivacyRouter {
     struct EpochAdvanced {
         old_epoch: u64,
         new_epoch: u64,
-        timestamp: u64,
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct StealthWorkerPaymentSent {
-        #[key]
-        job_id: u256,
-        #[key]
-        worker: ContractAddress,
-        announcement_index: u256,
-        sage_amount: u256,
         timestamp: u64,
     }
 
@@ -367,20 +321,14 @@ mod PrivacyRouter {
             encrypted_amount: ElGamalCiphertext,
             proof: EncryptionProof
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
             self._require_not_paused();
-
-            // SECURITY: Amount validation
-            assert!(amount > 0, "Amount must be greater than 0");
-
             let caller = get_caller_address();
 
             // Verify account is registered
             let mut account = self.accounts.read(caller);
             assert!(account.is_registered, "Account not registered");
 
-            // Verify encryption proof using full Sigma protocol
+            // Verify encryption proof (simplified - would be full ZK in production)
             assert!(verify_ciphertext(encrypted_amount), "Invalid ciphertext");
             self._verify_encryption_proof(amount, encrypted_amount, proof, account.public_key);
 
@@ -409,9 +357,6 @@ mod PrivacyRouter {
 
             // Try to advance epoch
             self._try_advance_epoch();
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn withdraw(
@@ -420,13 +365,7 @@ mod PrivacyRouter {
             encrypted_delta: ElGamalCiphertext,
             proof: EncryptionProof
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
             self._require_not_paused();
-
-            // SECURITY: Amount validation
-            assert!(amount > 0, "Amount must be greater than 0");
-
             let caller = get_caller_address();
 
             // Verify account is registered
@@ -461,17 +400,12 @@ mod PrivacyRouter {
                 public_amount: amount,
                 timestamp: get_block_timestamp(),
             });
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn private_transfer(
             ref self: ContractState,
             transfer: PrivateTransfer
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
             self._require_not_paused();
             let caller = get_caller_address();
 
@@ -527,9 +461,6 @@ mod PrivacyRouter {
             });
 
             self._try_advance_epoch();
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn receive_worker_payment(
@@ -539,14 +470,7 @@ mod PrivacyRouter {
             sage_amount: u256,
             encrypted_amount: ElGamalCiphertext
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
             self._require_not_paused();
-
-            // SECURITY: Validation
-            assert!(sage_amount > 0, "Amount must be greater than 0");
-            assert!(!worker.is_zero(), "Worker cannot be zero address");
-
             let caller = get_caller_address();
 
             // Only PaymentRouter can send worker payments
@@ -581,9 +505,6 @@ mod PrivacyRouter {
                 worker,
                 timestamp: get_block_timestamp(),
             });
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn claim_worker_payment(
@@ -591,8 +512,6 @@ mod PrivacyRouter {
             job_id: u256,
             decryption_proof: EncryptionProof
         ) {
-            // SECURITY: Reentrancy protection
-            self._reentrancy_guard_start();
             self._require_not_paused();
             let caller = get_caller_address();
 
@@ -629,9 +548,6 @@ mod PrivacyRouter {
                 worker: caller,
                 timestamp: get_block_timestamp(),
             });
-
-            // SECURITY: Release reentrancy lock
-            self._reentrancy_guard_end();
         }
 
         fn rollup_balance(ref self: ContractState) {
@@ -680,69 +596,6 @@ mod PrivacyRouter {
             self._only_owner();
             self.paused.write(paused);
         }
-
-        // =====================================================================
-        // Stealth Payment Integration
-        // =====================================================================
-
-        fn set_stealth_registry(ref self: ContractState, registry: ContractAddress) {
-            self._only_owner();
-            self.stealth_registry.write(registry);
-        }
-
-        fn get_stealth_registry(self: @ContractState) -> ContractAddress {
-            self.stealth_registry.read()
-        }
-
-        fn send_stealth_worker_payment(
-            ref self: ContractState,
-            job_id: u256,
-            worker: ContractAddress,
-            sage_amount: u256,
-            ephemeral_secret: felt252,
-            encryption_randomness: felt252
-        ) {
-            self._require_not_paused();
-            self._reentrancy_guard_start();
-
-            // Verify caller is authorized (payment router or owner)
-            let caller = get_caller_address();
-            assert!(
-                caller == self.payment_router.read() || caller == self.owner.read(),
-                "Not authorized"
-            );
-
-            // Get stealth registry
-            let registry_addr = self.stealth_registry.read();
-            assert!(!registry_addr.is_zero(), "Stealth registry not set");
-
-            // Transfer SAGE from caller to this contract first
-            let sage = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            sage.transfer_from(caller, get_contract_address(), sage_amount);
-
-            // Approve stealth registry to spend
-            sage.approve(registry_addr, sage_amount);
-
-            // Send via stealth registry
-            let registry = IStealthRegistryDispatcher { contract_address: registry_addr };
-            let announcement_index = registry.send_stealth_payment(
-                worker,
-                sage_amount,
-                ephemeral_secret,
-                encryption_randomness,
-                job_id
-            );
-
-            self.emit(StealthWorkerPaymentSent {
-                job_id,
-                worker,
-                announcement_index,
-                sage_amount,
-                timestamp: get_block_timestamp(),
-            });
-
-            self._reentrancy_guard_end();
-        }
     }
 
     #[generate_trait]
@@ -753,18 +606,6 @@ mod PrivacyRouter {
 
         fn _require_not_paused(self: @ContractState) {
             assert!(!self.paused.read(), "Contract is paused");
-        }
-
-        // =========================================================================
-        // Reentrancy Guard - Prevents reentrant calls to critical functions
-        // =========================================================================
-        fn _reentrancy_guard_start(ref self: ContractState) {
-            assert!(!self.reentrancy_locked.read(), "ReentrancyGuard: reentrant call");
-            self.reentrancy_locked.write(true);
-        }
-
-        fn _reentrancy_guard_end(ref self: ContractState) {
-            self.reentrancy_locked.write(false);
         }
 
         fn _try_advance_epoch(ref self: ContractState) {
@@ -796,23 +637,7 @@ mod PrivacyRouter {
             }
         }
 
-        // =====================================================================
-        // PRODUCTION SIGMA PROTOCOL VERIFICATION
-        // =====================================================================
-
         /// Verify proof that encrypted_amount correctly encrypts `amount` under public_key
-        /// Uses full Sigma protocol with Fiat-Shamir transform
-        ///
-        /// Protocol:
-        /// Prover knows: amount, randomness r such that:
-        ///   C1 = r * G
-        ///   C2 = amount * H + r * PK
-        ///
-        /// Sigma Protocol:
-        /// 1. Prover sends commitment: (R1 = k * G, R2 = k * PK) for random k
-        /// 2. Challenge: e = H(PK, C1, C2, R1, R2)
-        /// 3. Response: s = k - e * r
-        /// 4. Verifier checks: s*G + e*C1 == R1 AND s*PK + e*C2 - amount*H == R2
         fn _verify_encryption_proof(
             self: @ContractState,
             amount: u256,
@@ -820,62 +645,25 @@ mod PrivacyRouter {
             proof: EncryptionProof,
             public_key: ECPoint
         ) {
-            // === STEP 1: Structural Validation ===
+            // Simplified verification (production would use full Sigma protocol)
+            // 1. Verify commitment is valid EC point
             let commitment = get_commitment(proof);
             assert!(!is_zero(commitment), "Invalid proof commitment");
+
+            // 2. Verify Fiat-Shamir challenge is correct
+            let mut points: Array<ECPoint> = array![];
+            points.append(get_c1(encrypted_amount));
+            points.append(get_c2(encrypted_amount));
+            points.append(commitment);
+            points.append(public_key);
+
+            let _computed_challenge = hash_points(points);
+            // In production: strict challenge verification
+            // For now, basic check that proof has valid structure
             assert!(proof.response != 0, "Invalid proof response");
-
-            // Extract ciphertext points
-            let c1 = get_c1(encrypted_amount);
-            let c2 = get_c2(encrypted_amount);
-            let g = generator();
-
-            // === STEP 2: Recompute Fiat-Shamir Challenge ===
-            let mut challenge_input: Array<felt252> = array![];
-            challenge_input.append(public_key.x);
-            challenge_input.append(public_key.y);
-            challenge_input.append(c1.x);
-            challenge_input.append(c1.y);
-            challenge_input.append(c2.x);
-            challenge_input.append(c2.y);
-            challenge_input.append(commitment.x);
-            challenge_input.append(commitment.y);
-            let computed_challenge = poseidon_hash_span(challenge_input.span());
-
-            // Verify challenge matches
-            assert!(proof.challenge == computed_challenge, "Challenge verification failed");
-
-            // === STEP 3: Verify Sigma Protocol Equation ===
-            // Verify: s*G + e*C1 == commitment (for randomness knowledge)
-            // This proves knowledge of r such that C1 = r * G
-            let s_g = ec_mul(proof.response, g);
-            let e_c1 = ec_mul(proof.challenge, c1);
-            let lhs = ec_add(s_g, e_c1);
-
-            assert!(
-                lhs.x == commitment.x && lhs.y == commitment.y,
-                "Sigma protocol verification failed"
-            );
-
-            // === STEP 4: Verify Range Proof ===
-            // Range proof hash proves amount >= 0 and amount < 2^64
-            assert!(proof.range_proof_hash != 0, "Missing range proof");
-
-            // Verify range proof commitment matches expected
-            let amount_felt: felt252 = amount.try_into().expect('Amount overflow');
-            let expected_range_hash = pedersen_commit(amount_felt, proof.response);
-            assert!(
-                proof.range_proof_hash == expected_range_hash.x,
-                "Range proof verification failed"
-            );
         }
 
         /// Verify withdrawal proof (proves amount is less than encrypted balance)
-        /// Uses range proof to verify balance - amount >= 0 without revealing balance
-        ///
-        /// Protocol:
-        /// 1. Verify encrypted_delta correctly encrypts `amount`
-        /// 2. Verify balance - encrypted_delta >= 0 via range proof
         fn _verify_withdrawal_proof(
             self: @ContractState,
             amount: u256,
@@ -883,86 +671,29 @@ mod PrivacyRouter {
             proof: EncryptionProof,
             account: PrivateAccount
         ) {
-            // === STEP 1: Structural Validation ===
+            // Verify:
+            // 1. encrypted_delta correctly encrypts `amount`
+            // 2. balance - encrypted_delta >= 0 (range proof)
+
             let commitment = get_commitment(proof);
             assert!(!is_zero(commitment), "Invalid proof commitment");
-            assert!(proof.response != 0, "Invalid proof response");
             assert!(proof.range_proof_hash != 0, "Missing range proof");
 
-            // === STEP 2: Verify Encryption Proof ===
-            // Proves encrypted_delta correctly encrypts `amount`
-            let c1 = get_c1(encrypted_delta);
-            let c2 = get_c2(encrypted_delta);
-            let g = generator();
-
-            // Recompute challenge
-            let mut challenge_input: Array<felt252> = array![];
-            challenge_input.append(account.public_key.x);
-            challenge_input.append(account.public_key.y);
-            challenge_input.append(c1.x);
-            challenge_input.append(c1.y);
-            challenge_input.append(c2.x);
-            challenge_input.append(c2.y);
-            challenge_input.append(commitment.x);
-            challenge_input.append(commitment.y);
-            let computed_challenge = poseidon_hash_span(challenge_input.span());
-
-            assert!(proof.challenge == computed_challenge, "Challenge verification failed");
-
-            // Verify: s*G + e*C1 == commitment
-            let s_g = ec_mul(proof.response, g);
-            let e_c1 = ec_mul(proof.challenge, c1);
-            let lhs = ec_add(s_g, e_c1);
-            assert!(
-                lhs.x == commitment.x && lhs.y == commitment.y,
-                "Withdrawal proof verification failed"
-            );
-
-            // === STEP 3: Verify Range Proof for Remaining Balance ===
-            // The range proof hash proves:
-            // balance - amount >= 0 (no overdraft)
-            // This is verified by checking the prover committed to a non-negative value
-            let amount_felt: felt252 = amount.try_into().expect('Amount overflow');
-
-            // Verify range proof structure
-            // The range proof hash should be derived from the remaining balance commitment
-            let balance_c1 = get_c1(account.encrypted_balance.ciphertext);
-            let balance_c2 = get_c2(account.encrypted_balance.ciphertext);
-
-            // Compute remaining balance ciphertext (balance - delta)
-            let remaining_c1 = ec_sub(balance_c1, c1);
-            let remaining_c2 = ec_sub(balance_c2, c2);
-
-            // The range proof hash should incorporate the remaining balance
-            let mut range_input: Array<felt252> = array![];
-            range_input.append(remaining_c1.x);
-            range_input.append(remaining_c1.y);
-            range_input.append(remaining_c2.x);
-            range_input.append(remaining_c2.y);
-            range_input.append(amount_felt);
-            let _expected_range_hash = poseidon_hash_span(range_input.span());
-
-            // Verify range proof is consistent with withdrawal
-            // Full Bulletproof verification verifies the range proof hash
-            // ensures that balance - amount >= 0 without revealing balance
-            assert!(proof.range_proof_hash != 0, "Invalid range proof");
+            // In production: full Bulletproof verification for range
         }
 
         /// Verify transfer proof (proves valid sender debit and receiver credit)
-        /// Uses linked Sigma proofs to verify same value is debited and credited
-        ///
-        /// Protocol:
-        /// 1. Verify sender_delta encrypts value v under sender's key
-        /// 2. Verify encrypted_amount encrypts same value v under receiver's key
-        /// 3. Verify sender has sufficient balance (range proof)
-        /// 4. Verify amount is non-negative (range proof)
         fn _verify_transfer_proof(
             self: @ContractState,
             transfer: PrivateTransfer,
             sender_pk: ECPoint,
             receiver_pk: ECPoint
         ) {
-            // === STEP 1: Structural Validation ===
+            // Verify:
+            // 1. sender_delta and encrypted_amount encrypt same value
+            // 2. sender has sufficient balance
+            // 3. Amount is non-negative
+
             let sender_commitment = get_commitment(transfer.proof.sender_proof);
             let receiver_commitment = get_commitment(transfer.proof.receiver_proof);
             assert!(!is_zero(sender_commitment), "Invalid sender proof");
@@ -971,171 +702,25 @@ mod PrivacyRouter {
             // Verify ciphertexts are well-formed
             assert!(verify_ciphertext(transfer.encrypted_amount), "Invalid receiver ciphertext");
             assert!(verify_ciphertext(transfer.sender_delta), "Invalid sender ciphertext");
-
-            // === STEP 2: Verify Sender Proof ===
-            // Proves knowledge of (amount, r_sender) for sender_delta
-            let sender_c1 = get_c1(transfer.sender_delta);
-            let sender_c2 = get_c2(transfer.sender_delta);
-            let g = generator();
-
-            let mut sender_challenge_input: Array<felt252> = array![];
-            sender_challenge_input.append(sender_pk.x);
-            sender_challenge_input.append(sender_pk.y);
-            sender_challenge_input.append(sender_c1.x);
-            sender_challenge_input.append(sender_c1.y);
-            sender_challenge_input.append(sender_c2.x);
-            sender_challenge_input.append(sender_c2.y);
-            sender_challenge_input.append(sender_commitment.x);
-            sender_challenge_input.append(sender_commitment.y);
-            let sender_challenge = poseidon_hash_span(sender_challenge_input.span());
-
-            assert!(
-                transfer.proof.sender_proof.challenge == sender_challenge,
-                "Sender challenge verification failed"
-            );
-
-            // Verify sender Sigma equation
-            let sender_s_g = ec_mul(transfer.proof.sender_proof.response, g);
-            let sender_e_c1 = ec_mul(transfer.proof.sender_proof.challenge, sender_c1);
-            let sender_lhs = ec_add(sender_s_g, sender_e_c1);
-            assert!(
-                sender_lhs.x == sender_commitment.x && sender_lhs.y == sender_commitment.y,
-                "Sender proof verification failed"
-            );
-
-            // === STEP 3: Verify Receiver Proof ===
-            // Proves knowledge of (amount, r_receiver) for encrypted_amount
-            let receiver_c1 = get_c1(transfer.encrypted_amount);
-            let receiver_c2 = get_c2(transfer.encrypted_amount);
-
-            let mut receiver_challenge_input: Array<felt252> = array![];
-            receiver_challenge_input.append(receiver_pk.x);
-            receiver_challenge_input.append(receiver_pk.y);
-            receiver_challenge_input.append(receiver_c1.x);
-            receiver_challenge_input.append(receiver_c1.y);
-            receiver_challenge_input.append(receiver_c2.x);
-            receiver_challenge_input.append(receiver_c2.y);
-            receiver_challenge_input.append(receiver_commitment.x);
-            receiver_challenge_input.append(receiver_commitment.y);
-            let receiver_challenge = poseidon_hash_span(receiver_challenge_input.span());
-
-            assert!(
-                transfer.proof.receiver_proof.challenge == receiver_challenge,
-                "Receiver challenge verification failed"
-            );
-
-            // Verify receiver Sigma equation
-            let receiver_s_g = ec_mul(transfer.proof.receiver_proof.response, g);
-            let receiver_e_c1 = ec_mul(transfer.proof.receiver_proof.challenge, receiver_c1);
-            let receiver_lhs = ec_add(receiver_s_g, receiver_e_c1);
-            assert!(
-                receiver_lhs.x == receiver_commitment.x && receiver_lhs.y == receiver_commitment.y,
-                "Receiver proof verification failed"
-            );
-
-            // === STEP 4: Verify Same Amount (Linked Sigma Proof) ===
-            // The balance_proof hash links sender and receiver amounts
-            // It proves: amount_sender == amount_receiver
-            // This is done by proving the amounts encode the same value:
-            // sender_delta.C2 - r_s*sender_pk = amount*H
-            // encrypted_amount.C2 - r_r*receiver_pk = amount*H
-            // Therefore the decoded amounts are equal
-
-            assert!(transfer.proof.balance_proof != 0, "Missing balance linkage proof");
-
-            // Verify the balance proof links both encryptions
-            let mut balance_input: Array<felt252> = array![];
-            balance_input.append(sender_c1.x);
-            balance_input.append(sender_c2.x);
-            balance_input.append(receiver_c1.x);
-            balance_input.append(receiver_c2.x);
-            balance_input.append(transfer.nullifier);
-            let expected_balance_hash = poseidon_hash_span(balance_input.span());
-
-            assert!(
-                transfer.proof.balance_proof == expected_balance_hash,
-                "Balance linkage proof failed - amounts may differ"
-            );
-
-            // === STEP 5: Verify Range Proofs ===
-            // Both proofs must include valid range proof hashes
-            assert!(
-                transfer.proof.sender_proof.range_proof_hash != 0,
-                "Missing sender range proof"
-            );
-            assert!(
-                transfer.proof.receiver_proof.range_proof_hash != 0,
-                "Missing receiver range proof"
-            );
         }
 
         /// Verify decryption proof (proves knowledge of private key)
-        /// Uses Schnorr protocol to prove sk knowledge without revealing it
-        ///
-        /// Protocol (Schnorr):
-        /// Prover knows: sk such that PK = sk * G
-        /// 1. Prover sends commitment: R = k * G (for random k)
-        /// 2. Challenge: e = H(PK, R, ciphertext)
-        /// 3. Response: s = k - e * sk
-        /// 4. Verifier checks: s*G + e*PK == R
         fn _verify_decryption_proof(
             self: @ContractState,
             ciphertext: ElGamalCiphertext,
             proof: EncryptionProof,
             public_key: ECPoint
         ) {
-            // === STEP 1: Structural Validation ===
+            // Verify that prover knows sk such that pk = sk * G
+            // This is a Schnorr-like proof
+
             let commitment = get_commitment(proof);
             assert!(!is_zero(commitment), "Invalid decryption proof");
             assert!(proof.response != 0, "Invalid proof response");
-            assert!(!is_zero(public_key), "Invalid public key");
 
-            let g = generator();
-
-            // === STEP 2: Recompute Fiat-Shamir Challenge ===
-            let mut challenge_input: Array<felt252> = array![];
-            challenge_input.append(public_key.x);
-            challenge_input.append(public_key.y);
-            challenge_input.append(commitment.x);
-            challenge_input.append(commitment.y);
-            // Include ciphertext for binding
-            challenge_input.append(ciphertext.c1_x);
-            challenge_input.append(ciphertext.c1_y);
-            challenge_input.append(ciphertext.c2_x);
-            challenge_input.append(ciphertext.c2_y);
-            let computed_challenge = poseidon_hash_span(challenge_input.span());
-
-            assert!(proof.challenge == computed_challenge, "Decryption challenge verification failed");
-
-            // === STEP 3: Verify Schnorr Equation ===
-            // Verify: s*G + e*PK == R (commitment)
-            // This proves knowledge of sk such that PK = sk * G
-            let s_g = ec_mul(proof.response, g);
-            let e_pk = ec_mul(proof.challenge, public_key);
-            let lhs = ec_add(s_g, e_pk);
-
-            assert!(
-                lhs.x == commitment.x && lhs.y == commitment.y,
-                "Schnorr verification failed - invalid private key proof"
-            );
-
-            // === STEP 4: Verify Decryption Binding ===
-            // The proof must be bound to this specific ciphertext
-            // This prevents replay attacks where a valid proof is reused
-            let c1 = get_c1(ciphertext);
-            let c2 = get_c2(ciphertext);
-
-            // Verify that the commitment incorporates the ciphertext
-            let mut binding_input: Array<felt252> = array![];
-            binding_input.append(c1.x);
-            binding_input.append(c1.y);
-            binding_input.append(c2.x);
-            binding_input.append(c2.y);
-            binding_input.append(proof.response);
-            let _binding_hash = poseidon_hash_span(binding_input.span());
-
-            // Binding check ensures this proof was created for this ciphertext
-            // The prover must have computed the response using this ciphertext
+            // In production: full Schnorr verification
+            // e = H(pk, commitment, ciphertext)
+            // Verify: response * G == commitment + e * pk
         }
     }
 }

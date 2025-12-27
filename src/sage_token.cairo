@@ -33,6 +33,7 @@ pub mod SAGEToken {
     };
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::upgrades::UpgradeableComponent;
+    use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::ClassHash;
 
     // Component declarations
@@ -50,7 +51,9 @@ pub mod SAGEToken {
         ALLOC_PRE_SEED, ALLOC_CODE_DEV_INFRA, ALLOC_PUBLIC_SALE, ALLOC_STRATEGIC_PARTNERS,
         ALLOC_SEED, ALLOC_ADVISORS, TGE_TOTAL, TGE_PUBLIC_SALE,
         // Vesting periods
-        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS, VEST_PUBLIC_SALE_MONTHS,
+        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS, VEST_PRE_SEED_MONTHS,
+        VEST_CODE_DEV_MONTHS, VEST_PUBLIC_SALE_MONTHS, VEST_STRATEGIC_MONTHS,
+        VEST_SEED_MONTHS, VEST_ADVISORS_CLIFF, VEST_ADVISORS_MONTHS,
         // Emission rates
         EMISSION_RATE_YEAR_1, EMISSION_RATE_YEAR_2, EMISSION_RATE_YEAR_3,
         EMISSION_RATE_YEAR_4, EMISSION_RATE_YEAR_5
@@ -115,20 +118,7 @@ pub mod SAGEToken {
         last_governance_pause: u64, // Prevent governance pause spam
         governance_paused: bool, // Emergency governance pause state
         governance_pause_ends: u64, // When governance pause ends
-
-        /// Governance Statistics (Production-grade tracking)
-        global_active_proposals: u32, // Count of currently active proposals
-        total_unique_voters: u256, // Count of unique addresses that have voted
-        voter_registry: Map<ContractAddress, bool>, // Track unique voters
-        total_votes_cast: u256, // Total votes cast across all proposals
-        total_participation_weight: u256, // Weighted participation for averaging
-
-        /// Governance-Approved Rate Modifiers
-        /// These are applied as adjustments to the base rates
-        governance_inflation_modifier: i32, // Signed modifier in basis points
-        governance_burn_modifier: i32,      // Signed modifier in basis points
-        last_rate_governance_update: u64,   // Timestamp of last governance rate change
-
+        
         /// Revenue and Burn Tracking
         burn_history: Map<u32, BurnEvent>,
         burn_history_count: u32,
@@ -1091,10 +1081,7 @@ pub mod SAGEToken {
             self.governance_proposals.write(proposal_id, proposal);
             self.last_proposal_time.write(caller, current_time);
             self.active_proposals_count.write(caller, active_proposals + 1);
-
-            // Increment global active proposals count
-            self.global_active_proposals.write(self.global_active_proposals.read() + 1);
-
+            
             self.emit(ProposalCreated {
                 proposal_id,
                 proposer: caller,
@@ -1151,10 +1138,10 @@ pub mod SAGEToken {
         
         fn get_governance_stats(self: @ContractState) -> GovernanceStats {
             let total_proposals = self.proposal_count.read();
-
-            // Calculate successful proposals from executed proposals
-            let mut successful_proposals: u256 = 0;
-            let mut i: u256 = 1;
+            
+            // Calculate successful proposals (simplified)
+            let mut successful_proposals = 0;
+            let mut i = 1;
             while i != total_proposals + 1 {
                 let proposal = self.governance_proposals.read(i);
                 if proposal.status == ProposalStatus::Executed && proposal.votes_for > proposal.votes_against {
@@ -1162,34 +1149,14 @@ pub mod SAGEToken {
                 }
                 i += 1;
             };
-
-            // Calculate average participation rate (as basis points, max 10000)
-            let total_votes = self.total_votes_cast.read();
-            let total_weight = self.total_participation_weight.read();
-            let total_supply = self.total_supply.read();
-
-            // Average participation = (total_weight / total_votes) / total_supply * 10000
-            // Simplified: (total_weight * 10000) / (total_votes * total_supply)
-            let average_participation_u256: u256 = if total_votes > 0 && total_supply > 0 {
-                (total_weight * 10000) / (total_votes * total_supply)
-            } else {
-                0
-            };
-
-            // Cap at 10000 (100%) and convert to u32
-            let average_participation: u32 = if average_participation_u256 > 10000 {
-                10000
-            } else {
-                average_participation_u256.try_into().unwrap_or(0)
-            };
-
+            
             GovernanceStats {
                 total_proposals,
-                active_proposals: self.global_active_proposals.read().into(),
+                active_proposals: 0, // Would need to count active proposals
                 executed_proposals: successful_proposals,
-                total_voters: self.total_unique_voters.read(),
-                average_participation,
-                total_voting_power: total_supply,
+                total_voters: 0, // Would need to track total voters
+                average_participation: 0, // Could be calculated from historical data
+                total_voting_power: self.total_supply.read(),
             }
         }
         
@@ -1256,19 +1223,7 @@ pub mod SAGEToken {
             // Record vote
             assert(!self.voted_proposals.read((caller, proposal_id)), 'Already voted');
             self.voted_proposals.write((caller, proposal_id), true);
-
-            // Track unique voters for governance statistics
-            if !self.voter_registry.read(caller) {
-                self.voter_registry.write(caller, true);
-                self.total_unique_voters.write(self.total_unique_voters.read() + 1);
-            }
-
-            // Update global voting statistics
-            self.total_votes_cast.write(self.total_votes_cast.read() + 1);
-            self.total_participation_weight.write(
-                self.total_participation_weight.read() + voting_power
-            );
-
+            
             // Update proposal vote counts
             let mut updated_proposal = proposal;
             if vote_for {
@@ -1319,67 +1274,15 @@ pub mod SAGEToken {
             let proposal_passed = votes_for_percentage >= required_percentage.into();
             
             if proposal_passed {
-                let current_time = get_block_timestamp();
-
-                // Execute inflation rate change
+                // Execute the proposal
                 if proposal.inflation_change != 0 {
-                    // Validate the change is within allowed bounds
-                    let abs_change: u32 = if proposal.inflation_change < 0 {
-                        (proposal.inflation_change * -1).try_into().unwrap_or(0)
-                    } else {
-                        proposal.inflation_change.try_into().unwrap_or(0)
-                    };
-                    assert(abs_change <= MAX_INFLATION_CHANGE, 'Inflation change exceeds max');
-
-                    // Get current modifier and compute new modifier
-                    let old_modifier = self.governance_inflation_modifier.read();
-                    let new_modifier = old_modifier + proposal.inflation_change;
-
-                    // Apply the change
-                    self.governance_inflation_modifier.write(new_modifier);
-
-                    // Calculate effective rates for event emission
-                    let old_effective = self._calculate_effective_inflation_rate(old_modifier);
-                    let new_effective = self._calculate_effective_inflation_rate(new_modifier);
-
-                    self.emit(Event::InflationRateChanged(InflationRateChanged {
-                        old_rate: old_effective,
-                        new_rate: new_effective,
-                        timestamp: current_time,
-                    }));
+                    // Update inflation rate (implementation would go here)
+                    // For now, we'll just track that it was approved
                 }
-
-                // Execute burn rate change
+                
                 if proposal.burn_rate_change != 0 {
-                    // Validate the change is within allowed bounds
-                    let abs_change: u32 = if proposal.burn_rate_change < 0 {
-                        (proposal.burn_rate_change * -1).try_into().unwrap_or(0)
-                    } else {
-                        proposal.burn_rate_change.try_into().unwrap_or(0)
-                    };
-                    assert(abs_change <= MAX_BURN_RATE_CHANGE, 'Burn rate change exceeds max');
-
-                    // Get current modifier and compute new modifier
-                    let old_modifier = self.governance_burn_modifier.read();
-                    let new_modifier = old_modifier + proposal.burn_rate_change;
-
-                    // Apply the change
-                    self.governance_burn_modifier.write(new_modifier);
-
-                    // Calculate effective rates for event emission
-                    let old_effective = self._calculate_effective_burn_rate(old_modifier);
-                    let new_effective = self._calculate_effective_burn_rate(new_modifier);
-
-                    self.emit(Event::BurnRateChanged(BurnRateChanged {
-                        old_rate: old_effective,
-                        new_rate: new_effective,
-                        timestamp: current_time,
-                    }));
-                }
-
-                // Update last governance rate change timestamp
-                if proposal.inflation_change != 0 || proposal.burn_rate_change != 0 {
-                    self.last_rate_governance_update.write(current_time);
+                    // Update burn rate (implementation would go here)
+                    // For now, we'll just track that it was approved
                 }
             }
             
@@ -1394,12 +1297,6 @@ pub mod SAGEToken {
             let current_count = self.active_proposals_count.read(proposer);
             if current_count > 0 {
                 self.active_proposals_count.write(proposer, current_count - 1);
-            }
-
-            // Decrease global active proposals count
-            let global_count = self.global_active_proposals.read();
-            if global_count > 0 {
-                self.global_active_proposals.write(global_count - 1);
             }
             
             self.emit(Event::ProposalExecuted(ProposalExecuted {
@@ -2573,72 +2470,16 @@ pub mod SAGEToken {
             proposal_type >= 2 // Protocol upgrades, emergency, strategic
         }
 
-        /// Calculate effective inflation rate with a given governance modifier
-        fn _calculate_effective_inflation_rate(self: @ContractState, modifier: i32) -> u32 {
-            let base_rate = self._get_base_inflation_rate();
-
-            // Apply governance modifier (can be positive or negative)
-            if modifier >= 0 {
-                let modifier_u32: u32 = modifier.try_into().unwrap_or(0);
-                // Cap at maximum reasonable rate (20%)
-                let new_rate = base_rate + modifier_u32;
-                if new_rate > 2000 {
-                    2000
-                } else {
-                    new_rate
-                }
-            } else {
-                let abs_modifier: u32 = (modifier * -1).try_into().unwrap_or(0);
-                // Prevent underflow - minimum rate is 0
-                if abs_modifier >= base_rate {
-                    0
-                } else {
-                    base_rate - abs_modifier
-                }
-            }
-        }
-
-        /// Calculate effective burn rate with a given governance modifier
-        fn _calculate_effective_burn_rate(self: @ContractState, modifier: i32) -> u32 {
-            let base_rate = self._get_base_burn_rate();
-
-            // Apply governance modifier (can be positive or negative)
-            if modifier >= 0 {
-                let modifier_u32: u32 = modifier.try_into().unwrap_or(0);
-                // Cap at 100% (10000 basis points)
-                let new_rate = base_rate + modifier_u32;
-                if new_rate > 10000 {
-                    10000
-                } else {
-                    new_rate
-                }
-            } else {
-                let abs_modifier: u32 = (modifier * -1).try_into().unwrap_or(0);
-                // Prevent underflow - minimum rate is 0
-                if abs_modifier >= base_rate {
-                    0
-                } else {
-                    base_rate - abs_modifier
-                }
-            }
-        }
-
-        /// Get base inflation rate without governance modifier
-        fn _get_base_inflation_rate(self: @ContractState) -> u32 {
+        fn _get_current_inflation_rate(self: @ContractState) -> u32 {
+            // Update inflation rate based on network phase
             let phase = self._determine_current_phase();
-
+            
             match phase {
                 0 => 800, // 8% - Bootstrap phase
-                1 => 500, // 5% - Growth phase
+                1 => 500, // 5% - Growth phase  
                 2 => 300, // 3% - Transition phase
-                _ => 100, // 1% for mature
+                _ => 100,               // 1% for mature
             }
-        }
-
-        fn _get_current_inflation_rate(self: @ContractState) -> u32 {
-            // Apply governance modifier to base rate
-            let modifier = self.governance_inflation_modifier.read();
-            self._calculate_effective_inflation_rate(modifier)
         }
 
         fn _get_current_burn_rate(self: @ContractState) -> u32 {
@@ -2706,23 +2547,7 @@ pub mod SAGEToken {
                 }
             };
 
-            // Apply governance modifier on top of revenue-adjusted rate
-            let governance_modifier = self.governance_burn_modifier.read();
-            if governance_modifier == 0 {
-                return effective_rate;
-            }
-
-            // Apply governance modifier
-            if governance_modifier >= 0 {
-                let modifier_u32: u32 = governance_modifier.try_into().unwrap_or(0);
-                // Cap at 100% (10000 basis points)
-                let new_rate = effective_rate + modifier_u32;
-                if new_rate > 10000 { 10000 } else { new_rate }
-            } else {
-                let abs_modifier: u32 = (governance_modifier * -1).try_into().unwrap_or(0);
-                // Floor at 0
-                if abs_modifier >= effective_rate { 0 } else { effective_rate - abs_modifier }
-            }
+            effective_rate
         }
 
         /// Phase 3: Get base burn rate without revenue adjustment (for reporting)
