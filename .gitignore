@@ -11,8 +11,29 @@ testnet_*.json
 *_deployment*.log
 temp_account.json
 
-# Keystores (sensitive)
+# Keystores (sensitive - NEVER commit)
 **/keystores/*.json
+**/keystore*.json
+deployment/sepolia_keystore.json
+deployment/pool_wallets/
+admin_accounts/
+airdrop/keystores/
+*deployer*.json
+
+# Deploy scripts with credentials (use environment variables instead)
+deploy_*.mjs
+sign_deploy*.mjs
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.*.example
+
+# Node
+node_modules/
+package-lock.json
 
 # Backups
 *.bak
@@ -21,3 +42,6 @@ temp_account.json
 
 # OS
 .DS_Store
+
+# Test cache
+.snfoundry_cache/
