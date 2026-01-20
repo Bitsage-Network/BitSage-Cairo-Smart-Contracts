@@ -12,6 +12,7 @@
   <a href="#architecture">Architecture</a> •
   <a href="#economics">Economics</a> •
   <a href="#contracts">Contracts</a> •
+  <a href="#privacy">Privacy</a> •
   <a href="#quickstart">Quick Start</a> •
   <a href="#deployment">Deployment</a>
 </p>
@@ -19,6 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Cairo-2.8+-blue?style=flat-square" alt="Cairo"/>
   <img src="https://img.shields.io/badge/Starknet-Sepolia-purple?style=flat-square" alt="Network"/>
+  <img src="https://img.shields.io/badge/Tests-440_passing-brightgreen?style=flat-square" alt="Tests"/>
   <img src="https://img.shields.io/badge/License-BUSL--1.1-green?style=flat-square" alt="License"/>
 </p>
 
@@ -133,7 +135,7 @@ src/
 │       ├── burn_manager.cairo        # Deflationary mechanics
 │       └── treasury_timelock.cairo   # Multi-sig treasury
 │
-├── 🔐 OBELYSK PROTOCOL (GPU Proving)
+├── 🔐 OBELYSK PROTOCOL (GPU Proving + Privacy Layer)
 │   │
 │   │   ╔═══════════════════════════════════════════════════╗
 │   │   ║  ██████╗ ██████╗ ███████╗██╗  ██╗   ██╗███████╗██╗║
@@ -146,10 +148,39 @@ src/
 │   │   ╚═══════════════════════════════════════════════════╝
 │   │
 │   └── obelysk/
-│       ├── prover_registry.cairo     # GPU prover marketplace
-│       ├── validator_registry.cairo  # Validator management
-│       ├── optimistic_tee.cairo      # TEE with challenge period
-│       └── stwo_verifier.cairo       # ZK proof verification
+│       │
+│       ├── 🔒 PROOF VERIFICATION
+│       │   ├── stwo_verifier.cairo       # STWO ZK proof verification
+│       │   ├── fri_verifier.cairo        # FRI polynomial commitment
+│       │   ├── batch_verifier.cairo      # Batch proof verification
+│       │   └── proof_aggregator.cairo    # Proof aggregation & gas savings
+│       │
+│       ├── 🖥️ GPU INFRASTRUCTURE
+│       │   ├── prover_registry.cairo     # GPU prover marketplace
+│       │   ├── validator_registry.cairo  # Validator management
+│       │   └── optimistic_tee.cairo      # TEE with challenge period
+│       │
+│       ├── 🔐 PRIVACY LAYER (Zether-inspired)
+│       │   ├── elgamal.cairo             # ElGamal encryption primitives
+│       │   ├── pedersen_commitments.cairo # Pedersen commitments + range proofs
+│       │   ├── privacy_router.cairo      # Main privacy router contract
+│       │   ├── same_encryption.cairo     # Same-value encryption proofs
+│       │   ├── bit_proofs.cairo          # Bit decomposition range proofs
+│       │   └── worker_privacy.cairo      # Worker privacy helper
+│       │
+│       ├── 🌊 PRIVACY POOLS (Vitalik Buterin's Protocol)
+│       │   ├── privacy_pools.cairo       # ASP registry + compliance sets
+│       │   └── lean_imt.cairo            # Lean Incremental Merkle Tree
+│       │
+│       ├── 📡 FUZZY MESSAGE DETECTION
+│       │   └── fmd.cairo                 # S-FMD for privacy-preserving filtering
+│       │
+│       ├── 💱 CONFIDENTIAL SWAPS
+│       │   └── confidential_swap.cairo   # Encrypted atomic swaps
+│       │
+│       └── 🎭 ADVANCED PRIVACY
+│           ├── mixing_router.cairo       # Ring signature-based mixing
+│           └── steganographic_router.cairo # Steganographic transactions
 │
 ├── 📊 STAKING
 │   └── staking/
@@ -393,6 +424,146 @@ Pending → Active → Jailed → Unjailed → Active
 ```
 </details>
 
+<h3 id="privacy">🔐 Obelysk Privacy Layer</h3>
+
+The Obelysk Privacy Layer provides enterprise-grade privacy for GPU compute payments using advanced cryptographic primitives.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        OBELYSK PRIVACY ARCHITECTURE                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│   │   ElGamal   │    │  Pedersen   │    │    Range    │    │    Same     │  │
+│   │ Encryption  │───▶│ Commitments │───▶│   Proofs    │───▶│ Encryption  │  │
+│   │             │    │             │    │  (32-bit)   │    │   Proofs    │  │
+│   └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│          │                                                        │         │
+│          └────────────────────────┬───────────────────────────────┘         │
+│                                   ▼                                         │
+│                        ┌─────────────────────┐                              │
+│                        │   Privacy Router    │                              │
+│                        │  (Confidential Txs) │                              │
+│                        └──────────┬──────────┘                              │
+│                                   │                                         │
+│          ┌────────────────────────┼────────────────────────┐                │
+│          ▼                        ▼                        ▼                │
+│   ┌─────────────┐          ┌─────────────┐          ┌─────────────┐         │
+│   │  Privacy    │          │    FMD      │          │Confidential │         │
+│   │   Pools     │          │ (Filtering) │          │   Swaps     │         │
+│   │ (Compliance)│          │             │          │             │         │
+│   └─────────────┘          └─────────────┘          └─────────────┘         │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+<details>
+<summary><strong>🔒 Privacy Router</strong> - Confidential transactions</summary>
+
+```cairo
+// Features:
+- ElGamal-encrypted balances
+- Confidential transfers with hidden amounts
+- M-of-N auditor approval for large transfers
+- Ex-post compliance proofs
+- Threshold detection for regulatory compliance
+
+// Transaction Flow:
+1. Sender encrypts amount with ElGamal
+2. Range proof validates amount is positive
+3. Same-encryption proof links sender/receiver/auditor
+4. Atomic balance update preserves privacy
+```
+</details>
+
+<details>
+<summary><strong>🌊 Privacy Pools</strong> - Compliance-compatible privacy (Vitalik Buterin)</summary>
+
+```cairo
+// Based on: "Blockchain Privacy and Regulatory Compliance" (2023)
+
+// Components:
+- Association Set Providers (ASPs): Curate approved deposit lists
+- Inclusion Sets: Deposits approved by ASP
+- Exclusion Sets: Deposits blocked by ASP
+- Ragequit: Emergency exit for excluded users
+
+// Compliance Levels:
+┌─────────────────┬─────────────┬────────────┐
+│ Level           │ Privacy     │ Compliance │
+├─────────────────┼─────────────┼────────────┤
+│ Full Privacy    │ Maximum     │ None       │
+│ Compliant       │ High        │ Full       │
+│ Verified Clean  │ High        │ Maximum    │
+│ Ragequit        │ Reduced     │ N/A        │
+└─────────────────┴─────────────┴────────────┘
+```
+</details>
+
+<details>
+<summary><strong>📡 Fuzzy Message Detection</strong> - Privacy-preserving transaction filtering</summary>
+
+```cairo
+// Based on: Beck et al. "Fuzzy Message Detection" (CCS'21)
+
+// How it works:
+1. Receiver publishes clue_key (public)
+2. Sender creates clue with chosen precision
+3. Detection server scans with detection_key
+4. Returns matches (true positives + false positives)
+
+// False Positive Rates:
+- n=4:  ~6.25% false positives
+- n=8:  ~0.39% false positives
+- n=16: ~0.0015% false positives
+- n=24: ~0.000006% false positives
+
+// Use Case: Light clients filter transactions without full chain scan
+```
+</details>
+
+<details>
+<summary><strong>💱 Confidential Swaps</strong> - Encrypted atomic exchanges</summary>
+
+```cairo
+// Features:
+- ElGamal-encrypted trade amounts
+- Rate proofs (correct exchange rate)
+- Range proofs (positive amounts)
+- Balance proofs (sufficient funds)
+- Multi-asset support (SAGE, USDC, STRK, ETH, BTC)
+
+// Order Flow:
+1. Maker creates order with encrypted amounts
+2. Taker finds compatible order
+3. Proofs verify amounts and rates match
+4. Atomic settlement updates encrypted balances
+
+// Supported Assets:
+enum AssetId { SAGE, USDC, STRK, ETH, BTC, Custom(felt252) }
+```
+</details>
+
+<details>
+<summary><strong>🔢 Proof Aggregation</strong> - Batch verification for gas savings</summary>
+
+```cairo
+// Gas Savings:
+┌─────────────┬────────────────┬───────────────┬─────────┐
+│ Proofs      │ Individual Gas │ Batched Gas   │ Savings │
+├─────────────┼────────────────┼───────────────┼─────────┤
+│ 10 proofs   │ 1,500,000      │ 400,000       │ 73%     │
+│ 50 proofs   │ 7,500,000      │ 1,600,000     │ 79%     │
+│ 100 proofs  │ 15,000,000     │ 3,100,000     │ 79%     │
+└─────────────┴────────────────┴───────────────┴─────────┘
+
+// Aggregation Methods:
+- Random linear combination (Fiat-Shamir)
+- Merkle root commitment
+- Commitment aggregation
+```
+</details>
+
 ---
 
 <h2 id="quickstart">🚀 Quick Start</h2>
@@ -509,6 +680,9 @@ Located in `airdrop/`:
 - **Timelock**: Treasury operations delayed
 - **Rate limits**: Anti-abuse mechanisms
 - **Slashing**: Economic penalties for violations
+- **Privacy Layer**: ElGamal encryption + range proofs
+- **Compliance**: M-of-N auditor approval for large transfers
+- **Zero-Knowledge**: Confidential transactions with ZK proofs
 
 ---
 

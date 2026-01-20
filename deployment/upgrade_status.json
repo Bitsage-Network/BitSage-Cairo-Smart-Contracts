@@ -1,0 +1,15 @@
+{
+  "scheduled": {
+    "StwoVerifier": {
+      "classHash": "0x359d31018e76edee58f111f035ef29444e9de2f9ec6d9288bdd1202802649cd",
+      "txHash": "0x3c8cf6f30e4de739638dcaaf52f81cf2c10f5f355859766d5a78f40b6ad212c",
+      "timestamp": 1768227881325
+    },
+    "WorkerStaking": {
+      "classHash": "0x5602f1658765ad123db95cc3911f74f7b460d1b9b2cc783fa2533d8f3abfc26",
+      "txHash": "0x4f42fe4e9c84b001228a376a26234eb1d102bd78b2f600f038332d2e5fcb0c6",
+      "timestamp": 1768227947602
+    }
+  },
+  "executed": {}
+}

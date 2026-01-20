@@ -1,0 +1,172 @@
+{
+  "network": "sepolia",
+  "rpc_url": "https://api.cartridge.gg/x/starknet/sepolia",
+  "deployer": "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
+  "deployed_at": "2025-12-31",
+  "contracts": {
+    "SAGEToken": {
+      "class_hash": "0x0207f82c16228cb368dac6e9f7c5b934e2fcb442f59dd845437fc9c22f27b0c1",
+      "address": "0x04321b7282ae6aa354988eed57f2ff851314af8524de8b1f681a128003cc4ea5"
+    },
+    "ProverStaking": {
+      "class_hash": "0x07ae1a4fd1e464127dfbe7f70d35cb2418a0dc64d5001f44a06b52b80d0ff2b7",
+      "address": "0x0165fe12b09dd5e6b692cbf59f9c3ea0af30a2616f248c150357b07b967039da"
+    },
+    "ReputationManager": {
+      "class_hash": "0x069d16aab0a04cec95a0d8d2f8cc5c5ae25c37a0b5d4f3e47b3d57b1a8e9d2c4",
+      "address": "0x019c05a8f648c835e66e98c700b628d14ed4249e5e60e32c7f779d38da90e9d9"
+    },
+    "CDCPool": {
+      "class_hash": "0x069d3d78a1dba61592ea0d75d408058f0ef8daefa5e66e3aa136750c2a46a9dc",
+      "address": "0x012c8ab3fad97954eafbf99ab9d76a9c8e85dd0f6b38139d12d3c5e3f14f950b"
+    },
+    "PaymentRouter": {
+      "class_hash": "0x06e09c30f3b49c9bf3da9854976d376f1cf744641ef85b6a2c8b3ef135fd6efb",
+      "address": "0x006bfcc028c9976c18f8e22c2472df36d8d7848e7b55b814a5f15d339b97e1fe"
+    },
+    "Faucet": {
+      "class_hash": "0x05f8a16c9f2737faca0af8e3cb3a6073af6fba423de84a9eb896fed0ece04375",
+      "address": "0x07943ad334da99ab3dd138ff14d2045a7d962f1a426a4dd909fda026f37acf9f"
+    },
+    "JobManager": {
+      "class_hash": "0x05d13f31db06e0e76cae6311242971c2d80fa23648d2d4816a5d381f398d3b89",
+      "address": "0x0534a8f5cc1399b368b5be211df25e370f4a74d3d5b2d040f9d5b69981b069ed"
+    },
+    "OptimisticTEE": {
+      "class_hash": "0x05261ba84ac308895fade2cdd12d774da4cfecabd7d01ec232c115a04d9444f5",
+      "address": "0x04ea542ccad82e75681f438e1667baaeaca5285791dc2449e0f9f3df3e998b49"
+    },
+    "ProofVerifier": {
+      "class_hash": "0x03f78036db1938b73322ff913c9a7401f1c3d32257e87385dfe08519035f6743",
+      "address": "0x06c27c897108f20afbd045e561e465e0843d85e84fe7dfd55f910ee75df6385a"
+    },
+    "ValidatorRegistry": {
+      "class_hash": "0x06179e33e98b61c6e18227c58ea710e324ad0697e5ff9eb63d9f4fde0ab33424",
+      "address": "0x0252d13615dd74b70c9d653250fe8baa66130f683783c542c582dbc9709ee2cd"
+    },
+    "Collateral": {
+      "class_hash": "0x05e812f91910faf1ca13cfa2f2a8a413e2fa7c1f9d17da667618c7f7324e8fa3",
+      "address": "0x01384e775b5b19bd8756d5a77c7d9e99a739b35523915a1ad0b4c3c4d0b00f7c"
+    },
+    "Escrow": {
+      "class_hash": "0x0404eae057aaf156d46f5ddf3954b9857f9d4e6586afe1eee6aa02cb731eb44e",
+      "address": "0x045aa77cfaf3a902d879f3a26165922a423f5902c9d1647dbfe0274328930d4f"
+    },
+    "FeeManager": {
+      "class_hash": "0x0238f53edb9f5e513fce3f9fa34de5c08778a0a27f514ee668c58ef17f64910c",
+      "address": "0x0762a276d38f66b6fe8cf3eb140247624f02bb87e32917dffbad197c73f3fb56"
+    },
+    "FraudProof": {
+      "class_hash": "0x07988696528cc6def3f6000ecb7cdcb5a85a29561a8dd928835c4e225dbf0b7d",
+      "address": "0x0249179135c4d35f6a199de0fb91a1fbe29d5798e862bc14a108f1da8ec42acf"
+    },
+    "Gamification": {
+      "class_hash": "0x052d886895694037d792902c058d2f876b381334a4af2a6e01051d3ff12fe48b",
+      "address": "0x047402be0797cda868f2601f6234f56fa814e51957fa1981989ffcbf471e81e4"
+    },
+    "PrivacyRouter": {
+      "class_hash": "0x00b9f751e532d7d47baf4244e09fe8bf50624923c819413ad7af07330a6c2fc2",
+      "address": "0x0051e114ec3d524f203900c78e5217f23de51e29d6a6ecabb6dc92fb8ccca6e0"
+    },
+    "StwoVerifier": {
+      "class_hash": "0x01b1f7f5d76f1ea771e978ac6e36ea44e4a285d28d58e2b3bd695c35951b0e07",
+      "address": "0x00555555e154e28a596a59f98f857ec85f6dc7038f8d18dd1a08364d8e76dd47"
+    },
+    "MeteredBilling": {
+      "class_hash": "0x069947c0b7d442ff78e9bef5dc522b2f0a295520cf0384427e21027082c13bf7",
+      "address": "0x058b10cf0a1369fca1a90192d5b58a757a30a93af2ce5c3af0c16001fb57bb4b"
+    },
+    "ProofGatedPayment": {
+      "class_hash": "0x03df9be097353052efe9e7a6c001631a972ae6bcfeba805d9b0a1bdfd4e232ee",
+      "address": "0x06f153aff8835202fb3183ddf2edde40b1ca0360cdf20611649f05a16ca04cc7"
+    },
+    "ObelyskProverRegistry": {
+      "class_hash": "0x0244030b654fb035985471a4716ecd606702908c53e1c67282d196b71729356f",
+      "address": "0x005d46ac3e32242c2681a5171551abb773464812b77eec7e52d60ec612e9bf3a"
+    },
+    "WorkerStaking": {
+      "class_hash": "0x0126e7009c31f151ee7c7555f7a1383c53496a2e05c3e4f90b2b5d997668d0dd",
+      "address": "0x064df40ab00145394de98676d0934e49c0f436c4589d4d35ffa720e45c3de7e7"
+    },
+    "WorkerPrivacyHelper": {
+      "class_hash": "0x043f18e1ba3756f75c2743efb1b03561c70f6d59a5e31fd1ac9c973bd128e927",
+      "address": "0x06219e1e40b7a07c0a07fa38e4c19b661943d2f410839ddfe5e3bf7376206e47"
+    },
+    "OracleWrapper": {
+      "class_hash": "0x0149e6293189477ff369f0f66a18ce897804473dbba0ad011e5209c0195e0f50",
+      "address": "0x0020ba92a5df4c7719decbc8e43d5475059311b0b8bb2cdd623f5f29d61f0f2d"
+    },
+    "RewardVesting": {
+      "class_hash": "0x014cbc66f17e60fee6ba4ccaba856dee0970661880e8c2dda7b56166d86013a7",
+      "address": "0x07bb26a7d6d97e8292af9bb14244afbaaf2d722140111b8cced185bbde1a026d"
+    },
+    "BurnManager": {
+      "class_hash": "0x03183d69ef8ea3fe705a5a95c4fab13d9da33c1bfdd65a2065c9fc8bc259d3fd",
+      "address": "0x04d11f83401087bc1813ae4f69ecb4e7c2477829b740d6a5ae900e9e81df1933"
+    },
+    "LinearVestingWithCliff": {
+      "class_hash": "0x05cd680255b88dcbc2f4804ce68e77b0d898ac2486e7671ca61e3cb5f20b2ff6",
+      "address": "0x06df34218f99b8bd19b0cdec2fcef7ca7bc07218799aed0d72f2078b9a68e6ba"
+    },
+    "MilestoneVesting": {
+      "class_hash": "0x012d2f6523e214444305557f71ce22a676a716ec4b75c9db73f4351380c7d3af",
+      "address": "0x04ae08af901c3952bf97252ad888b9138c930da780a66ec3a87b192413e95dd5"
+    },
+    "TreasuryTimelock": {
+      "class_hash": "0x0663102604e9df31111b37ffe48f84d75d695ee1449f91e170403e977e972d9a",
+      "address": "0x03246a3d6f51c08033a7030f795088f84c67c5ed8f7790405a4e192f0c59ff79"
+    },
+    "GovernanceTreasury": {
+      "class_hash": "0x018462fb82189b30cbbcb863a612957c6d074b326727f846aab187e5a9e8708c",
+      "address": "0x00f8718089716c532f084326a707678ae1b159386613e86ced48c53fa24c8a3b"
+    },
+    "OTCOrderbook": {
+      "class_hash": "0x164412038d9120dad5d3bc8b100d1b3293d9f6ac9f4f0263a7f8a05af49c024",
+      "address": "0x7dc7794611840bf2682ac9fedbc9e735297f49b3adecac75a912c8a6d058034"
+    },
+    "ConfidentialSwapContract": {
+      "class_hash": "0x3b148c460c8bac9b1fdf8339fb7a8f0472e9406d8f58cb8a74225b6b9fa8bd9",
+      "address": "0xf4bfe6593c88fbbc95b30f32347a556db2c1be4a34982d8b3161f9e62a2ef1"
+    },
+    "ReferralSystem": {
+      "class_hash": "0x1396c204a2ee350ff06aa85607a9c818a6e4f2857eea54c0184150f116aa137",
+      "address": "0xca4865931c8f9e31b4ad60fec050a6103d2029a719d438f1e2d00608596eb"
+    },
+    "PrivacyPools": {
+      "class_hash": "0x64d5ea086363a8a6316517dafacaf6eb0f6a37bfebd99a3e1c06bc4231d516",
+      "address": "0x3e6b8684b1b1d55b88bd917b08df820fa3f23c92e19bab168e569bda430ef73"
+    },
+    "MixingRouter": {
+      "class_hash": "0x4405d9b074a9d489b374662b90d3d76b6300e46a57c96000f3af8e512f5b477",
+      "address": "0x5de7b4706688b3c7245f855b37d305b7b055504fbc96502656f47eec25366c1"
+    },
+    "SteganographicRouter": {
+      "class_hash": "0x648d2ef0ade1b3366321fa1890af95383e15811803e529b2fa5c37061dff349",
+      "address": "0x110e2ae805a49dc41b0e616c4c6a69de48287094a3798073a1247abd295684"
+    },
+    "AddressRegistry": {
+      "class_hash": "0x4a3b393585a68003d36dad8bca86f03543fe0759174d593eae2a58f0097d995",
+      "address": "0x17bb7d13c3cc30318b71d5fdb74569439e963528bfdcf2564e7d31f86ce6dbe"
+    },
+    "DynamicPricing": {
+      "class_hash": "0x26a14a47a2bbc3ae44ccb7bb8fd92159943a031ea5bf444e5299b44174c5d7b",
+      "address": "0x3f2893e9c9ed09cbfd007016291823ad2e48f82827f301295efa9b955346be7"
+    }
+  },
+  "notes": [
+    "ALL 27 contracts deployed to Starknet Sepolia testnet",
+    "RPC: Cartridge (https://api.cartridge.gg/x/starknet/sepolia)",
+    "PaymentRouter uses deployer address as placeholder for oracle/obelysk_router/pools",
+    "CDCPool min_stake set to 1000 SAGE (1000 * 10^18 wei)",
+    "OptimisticTEE uses deployer as placeholder for proof_verifier and proof_gated_payment",
+    "OracleWrapper uses deployer as placeholder for Pragma oracle address",
+    "Governance contracts use deployer as single council/multisig member for testnet",
+    "Some contracts use deployer as treasury placeholder - update for production",
+    "Additional contracts deployed on 2025-12-30T23:35:22.888Z",
+    "Additional contracts deployed on 2025-12-30T23:44:02.693Z"
+  ],
+  "explorer": {
+    "base_url": "https://sepolia.starkscan.co",
+    "contract_url_template": "https://sepolia.starkscan.co/contract/{address}"
+  }
+}
