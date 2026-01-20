@@ -12,7 +12,7 @@
 //! 5 - Century: 100 perfect jobs
 //! 6 - LegendStatus: Reach Legend level
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// Achievement metadata stored on-chain
 #[derive(Drop, Serde, Copy, PartialEq)]
@@ -51,16 +51,26 @@ pub trait IAchievementNFT<TContractState> {
     fn pause(ref self: TContractState);
     fn unpause(ref self: TContractState);
     fn is_paused(self: @TContractState) -> bool;
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
 pub mod AchievementNFT {
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
-    use core::num::traits::Zero;
     use openzeppelin::token::erc721::ERC721Component;
     use openzeppelin::introspection::src5::SRC5Component;
     use super::{IAchievementNFT, AchievementMetadata};
@@ -76,7 +86,7 @@ pub mod AchievementNFT {
             token_id: u256,
             auth: ContractAddress,
         ) {
-            let contract_state = ERC721Component::HasComponent::get_contract(@self);
+            let _contract_state = ERC721Component::HasComponent::get_contract(@self);
             // Get the current owner - if not zero, this is a transfer (not mint)
             let current_owner = self.owner_of(token_id);
             // Allow minting (owner is zero) but prevent transfers
@@ -127,6 +137,10 @@ pub mod AchievementNFT {
         erc721: ERC721Component::Storage,
         #[substorage(v0)]
         src5: SRC5Component::Storage,
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -137,6 +151,9 @@ pub mod AchievementNFT {
         OwnershipTransferred: OwnershipTransferred,
         ContractPaused: ContractPaused,
         ContractUnpaused: ContractUnpaused,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
         #[flat]
         ERC721Event: ERC721Component::Event,
         #[flat]
@@ -181,6 +198,31 @@ pub mod AchievementNFT {
         account: ContractAddress,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -194,6 +236,7 @@ pub mod AchievementNFT {
 
         self.owner.write(owner);
         self.total_supply.write(0);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -336,6 +379,84 @@ pub mod AchievementNFT {
 
         fn is_paused(self: @ContractState) -> bool {
             self.paused.read()
+        }
+
+        // =========================================================================
+        // Upgrade Functions
+        // =========================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(new_class_hash.is_non_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let execute_after = current_time + self.upgrade_delay.read();
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            let new_class_hash = self.pending_upgrade.read();
+            assert!(new_class_hash.is_non_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let current_time = get_block_timestamp();
+            assert!(current_time >= scheduled_at + self.upgrade_delay.read(), "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(new_class_hash).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            let pending_hash = self.pending_upgrade.read();
+            assert!(pending_hash.is_non_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending_hash,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read(),
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            self.upgrade_delay.write(delay);
         }
     }
 }

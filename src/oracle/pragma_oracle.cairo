@@ -6,7 +6,7 @@
 //
 // =============================================================================
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// Price data from Pragma
 #[derive(Copy, Drop, Serde)]
@@ -71,12 +71,22 @@ pub trait IOracleWrapper<TContractState> {
     fn set_circuit_breaker_config(ref self: TContractState, config: CircuitBreakerConfig);
     fn reset_circuit_breaker(ref self: TContractState);
     fn is_circuit_breaker_tripped(self: @TContractState) -> bool;
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
 mod OracleWrapper {
     use super::{IOracleWrapper, IPragmaOracleDispatcher, IPragmaOracleDispatcherTrait, PragmaPrice, PricePair, OracleConfig, CircuitBreakerConfig};
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess, StorageMapWriteAccess, Map};
     use core::num::traits::Zero;
 
@@ -98,6 +108,10 @@ mod OracleWrapper {
         circuit_breaker: CircuitBreakerConfig,
         last_prices: Map<felt252, u128>,      // pair_id -> last known price
         last_price_times: Map<felt252, u64>,  // pair_id -> timestamp of last price
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -106,6 +120,9 @@ mod OracleWrapper {
         CircuitBreakerTripped: CircuitBreakerTripped,
         CircuitBreakerReset: CircuitBreakerReset,
         PriceUpdated: PriceUpdated,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -130,6 +147,31 @@ mod OracleWrapper {
         pair_id: felt252,
         price: u128,
         timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
     }
 
     #[constructor]
@@ -167,6 +209,9 @@ mod OracleWrapper {
         self.fallback_prices.write(PAIR_BTC_USD, 10000000000000);
         // SAGE: $0.10 launch price = 10000000 (0.10 * 10^8)
         self.fallback_prices.write(PAIR_SAGE_USD, 10000000);
+
+        // Initialize upgrade delay (2 days = 172800 seconds)
+        self.upgrade_delay.write(172800);
     }
 
     #[abi(embed_v0)]
@@ -262,6 +307,84 @@ mod OracleWrapper {
 
         fn is_circuit_breaker_tripped(self: @ContractState) -> bool {
             self.circuit_breaker.read().tripped
+        }
+
+        // Upgrade functions
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+            assert(new_class_hash.is_non_zero(), 'Invalid class hash');
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+
+            let pending = self.pending_upgrade.read();
+            assert(pending.is_non_zero(), 'No upgrade scheduled');
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+
+            assert(now >= scheduled_at + delay, 'Upgrade delay not passed');
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute the upgrade
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+
+            let pending = self.pending_upgrade.read();
+            assert(pending.is_non_zero(), 'No upgrade scheduled');
+
+            let now = get_block_timestamp();
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: now,
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read(),
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+            self.upgrade_delay.write(delay);
         }
     }
 

@@ -1,4 +1,4 @@
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 use super::job_manager::{JobId, WorkerId, ModelRequirements};
 
 /// Worker capability flags (bitfield)
@@ -75,8 +75,8 @@ pub struct SlashRecord {
 
 /// Worker Staking Tier Enumeration (v3.1 - Realistic Capital Deployment)
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
 pub enum WorkerTier {
+    #[default]
     Basic,          // $100 - entry level
     Premium,        // $500 - serious commitment  
     Enterprise,     // $2,500 - business tier
@@ -164,6 +164,32 @@ impl SlashReasonIntoFelt252 of Into<SlashReason, felt252> {
             SlashReason::Fraud => 'fraud',
         }
     }
+}
+
+/// Dispute status for slash challenges
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
+#[allow(starknet::store_no_default_variant)]
+pub enum DisputeStatus {
+    None,           // No dispute
+    Pending,        // Dispute filed, awaiting resolution
+    Resolved,       // Dispute resolved (slash upheld)
+    Overturned,     // Dispute successful (slash overturned)
+    Expired,        // Dispute window expired without challenge
+}
+
+/// Dispute record for slash challenges
+#[derive(Copy, Drop, Serde, starknet::Store)]
+pub struct DisputeRecord {
+    pub slash_id: felt252,          // Reference to the slash record
+    pub worker_id: felt252,         // Worker who filed the dispute
+    pub challenger: ContractAddress, // Address that filed the dispute
+    pub evidence_hash: felt252,     // Hash of the evidence provided
+    pub dispute_bond: u256,         // Bond posted by challenger
+    pub filed_at: u64,              // When dispute was filed
+    pub deadline: u64,              // Deadline for resolution
+    pub status: DisputeStatus,      // Current status
+    pub resolver: ContractAddress,  // Who resolved the dispute (if resolved)
+    pub resolution_reason: felt252, // Reason for resolution
 }
 
 /// Add Into<u8> implementation for WorkerStatus
@@ -364,22 +390,41 @@ pub trait ICDCPool<TContractState> {
     ) -> u256;
     
     /// Challenge a slashing decision
-    /// @param worker_id: Worker challenging the slash
-    /// @param evidence: Counter-evidence
+    /// @param slash_id: ID of the slash record to challenge
+    /// @param evidence_hash: Hash of counter-evidence
+    /// @return dispute_id: ID of the created dispute
     fn challenge_slash(
         ref self: TContractState,
-        worker_id: WorkerId,
-        evidence: Array<felt252>
-    );
-    
-    /// Resolve slashing challenge
-    /// @param worker_id: Worker being challenged
-    /// @param upheld: Whether slashing is upheld
+        slash_id: felt252,
+        evidence_hash: felt252
+    ) -> felt252;
+
+    /// Resolve slashing challenge (admin only)
+    /// @param dispute_id: ID of the dispute to resolve
+    /// @param upheld: Whether slashing is upheld (true = slash stands, false = overturn)
+    /// @param resolution_reason: Reason for the resolution decision
     fn resolve_slash_challenge(
         ref self: TContractState,
-        worker_id: WorkerId,
-        upheld: bool
+        dispute_id: felt252,
+        upheld: bool,
+        resolution_reason: felt252
     );
+
+    /// Get dispute record by ID
+    /// @param dispute_id: ID of the dispute
+    /// @return DisputeRecord with dispute details
+    fn get_dispute(self: @TContractState, dispute_id: felt252) -> DisputeRecord;
+
+    /// Get slash record by ID
+    /// @param slash_id: ID of the slash record
+    /// @return SlashRecord with slash details
+    fn get_slash_record(self: @TContractState, slash_id: felt252) -> SlashRecord;
+
+    /// Get dispute bond amount required to challenge a slash
+    fn get_dispute_bond(self: @TContractState) -> u256;
+
+    /// Get dispute window duration (time to file a challenge after slash)
+    fn get_dispute_window(self: @TContractState) -> u64;
     
     /// Reward Distribution Functions
     
@@ -575,6 +620,25 @@ pub trait ICDCPool<TContractState> {
         worker_id: WorkerId,
         reason: felt252
     );
+
+    /// Upgrade Functions
+
+    /// Schedule a contract upgrade with timelock
+    /// @param new_class_hash: The new class hash to upgrade to
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// Execute a scheduled upgrade after timelock expires
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a pending upgrade
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get upgrade information (pending_class_hash, scheduled_at, delay)
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+
+    /// Set the upgrade timelock delay
+    /// @param delay: New delay in seconds (must be between 1 and 30 days)
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 /// Events emitted by the CDC Pool contract

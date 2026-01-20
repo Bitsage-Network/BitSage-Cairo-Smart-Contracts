@@ -11,7 +11,7 @@
 //
 // =============================================================================
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 // =============================================================================
 // Data Types
@@ -113,6 +113,13 @@ pub trait IAddressRegistry<TContractState> {
     // === Admin ===
     fn set_registration_fee(ref self: TContractState, fee: u256);
     fn get_registration_fee(self: @TContractState) -> u256;
+
+    // === Upgrade ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 // =============================================================================
@@ -123,13 +130,15 @@ pub trait IAddressRegistry<TContractState> {
 mod AddressRegistry {
     use super::{IAddressRegistry, RegisteredAddress, Protocol};
     use starknet::{
-        ContractAddress, get_caller_address, get_block_timestamp,
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
     };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess,
         Map,
     };
+    use core::num::traits::Zero;
 
     // =========================================================================
     // Storage
@@ -147,6 +156,10 @@ mod AddressRegistry {
         registration_fee: u256,
         /// Total registrations
         total_registrations: u64,
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     // =========================================================================
@@ -159,6 +172,9 @@ mod AddressRegistry {
         AddressRegistered: AddressRegistered,
         AddressUpdated: AddressUpdated,
         OwnershipTransferred: OwnershipTransferred,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -191,6 +207,31 @@ mod AddressRegistry {
         new_owner: ContractAddress,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -200,6 +241,7 @@ mod AddressRegistry {
         self.owner.write(owner);
         self.registration_fee.write(0); // Free for now
         self.total_registrations.write(0);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     // =========================================================================
@@ -361,6 +403,80 @@ mod AddressRegistry {
 
         fn get_registration_fee(self: @ContractState) -> u256 {
             self.registration_fee.read()
+        }
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+            assert(!new_class_hash.is_zero(), 'Invalid class hash');
+            assert(self.pending_upgrade.read().is_zero(), 'Upgrade already scheduled');
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+
+            let new_class_hash = self.pending_upgrade.read();
+            assert(!new_class_hash.is_zero(), 'No upgrade scheduled');
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+            assert(now >= scheduled_at + delay, 'Upgrade delay not passed');
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(new_class_hash).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+
+            let pending = self.pending_upgrade.read();
+            assert(!pending.is_zero(), 'No upgrade scheduled');
+
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert(get_caller_address() == self.owner.read(), 'Only owner');
+            self.upgrade_delay.write(delay);
         }
     }
 

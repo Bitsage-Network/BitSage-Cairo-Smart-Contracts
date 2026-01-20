@@ -5,7 +5,7 @@
 // Accepts: USDC, STRK, wBTC, SAGE with tiered discounts
 // All payments flow through Obelysk as SAGE with optional privacy
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 // Re-export ECPoint for interface usage
 pub use sage_contracts::obelysk::elgamal::ECPoint;
@@ -150,7 +150,21 @@ pub trait IPaymentRouter<TContractState> {
     /// Admin: Update OTC config
     fn set_otc_config(ref self: TContractState, config: OTCConfig);
 
-    /// Admin: Set Obelysk router address
+    // === Configuration Functions (Production-grade initialization) ===
+
+    /// Configure the obelysk_router dependency. Call after PrivacyRouter is deployed.
+    fn configure(ref self: TContractState, obelysk_router: ContractAddress);
+
+    /// Finalize configuration - locks obelysk_router permanently
+    fn finalize_configuration(ref self: TContractState);
+
+    /// Check if contract is configured
+    fn is_contract_configured(self: @TContractState) -> bool;
+
+    /// Check if configuration is locked
+    fn is_configuration_locked(self: @TContractState) -> bool;
+
+    /// Admin: Set Obelysk router address (deprecated, use configure())
     fn set_obelysk_router(ref self: TContractState, router: ContractAddress);
 
     /// Admin: Set staker rewards pool address
@@ -179,6 +193,26 @@ pub trait IPaymentRouter<TContractState> {
 
     /// Get worker's public key
     fn get_worker_public_key(self: @TContractState, worker: ContractAddress) -> ECPoint;
+
+    // ==================== UPGRADE FUNCTIONS ====================
+
+    /// Schedule a contract upgrade (owner only, timelocked)
+    /// @param new_class_hash: The class hash of the new implementation
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// Execute a scheduled upgrade after timelock expires
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a pending upgrade (owner only)
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get pending upgrade information
+    /// @return (pending_class_hash, scheduled_at, delay)
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+
+    /// Set upgrade delay (owner only)
+    /// @param delay: New delay in seconds (minimum 1 day)
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
@@ -187,12 +221,15 @@ mod PaymentRouter {
         IPaymentRouter, PaymentToken, PaymentQuote, OTCConfig,
         FeeDistribution, DiscountTiers, ECPoint
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_contract_address,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
-    use core::num::traits::Zero;
     use sage_contracts::oracle::pragma_oracle::{
         IOracleWrapperDispatcher, IOracleWrapperDispatcherTrait, PricePair
     };
@@ -238,9 +275,14 @@ mod PaymentRouter {
         staked_credits_used: Map<ContractAddress, u256>,
 
         // Obelysk integration
+        // obelysk_router is set via configure() to avoid circular dependency with PrivacyRouter
         obelysk_router: ContractAddress,      // Privacy router for optional anonymous payments
         staker_rewards_pool: ContractAddress, // Where 10% of protocol fee goes
         treasury_address: ContractAddress,    // Where 20% of protocol fee goes
+
+        // Configuration state - production-grade initialization pattern
+        configured: bool,   // True once configure() is called
+        finalized: bool,    // True once finalize() is called - locks forever
 
         // Job-to-worker mapping (set by JobManager)
         job_worker: Map<u256, ContractAddress>,
@@ -258,6 +300,14 @@ mod PaymentRouter {
         total_worker_payments: u256,
         total_staker_rewards: u256,
         total_treasury_collected: u256,
+
+        // ================ REENTRANCY GUARD ================
+        _reentrancy_guard: bool,
+
+        // ================ UPGRADE STORAGE ================
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -269,6 +319,10 @@ mod PaymentRouter {
         PrivacyPayment: PrivacyPayment,
         FeesDistributed: FeesDistributed,
         WorkerPaid: WorkerPaid,
+        // Upgrade events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -336,18 +390,47 @@ mod PaymentRouter {
         timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
         sage_address: ContractAddress,
         oracle_address: ContractAddress,
-        obelysk_router: ContractAddress,
         staker_rewards_pool: ContractAddress,
         treasury_address: ContractAddress
     ) {
+        // Production-grade: obelysk_router removed from constructor
+        // It creates a circular dependency with PrivacyRouter
+        // Set via configure() after PrivacyRouter is deployed
+        assert!(!owner.is_zero(), "Invalid owner");
+        assert!(!sage_address.is_zero(), "Invalid SAGE address");
+
         self.owner.write(owner);
-        self.obelysk_router.write(obelysk_router);
         self.staker_rewards_pool.write(staker_rewards_pool);
         self.treasury_address.write(treasury_address);
 
@@ -387,6 +470,13 @@ mod PaymentRouter {
         self.discount_tiers.write(discounts);
 
         self.quote_counter.write(0);
+
+        // Initialize upgrade delay: 2 days (172800 seconds)
+        self.upgrade_delay.write(172800);
+
+        // Configuration state
+        self.configured.write(false);
+        self.finalized.write(false);
     }
 
     #[abi(embed_v0)]
@@ -431,6 +521,9 @@ mod PaymentRouter {
             quote_id: u256,
             job_id: u256
         ) -> bool {
+            // SECURITY: Reentrancy guard for external calls
+            self._start_nonreentrant();
+
             let caller = get_caller_address();
             let now = get_block_timestamp();
 
@@ -442,20 +535,20 @@ mod PaymentRouter {
             assert(quote_owner == caller, 'Not quote owner');
             assert(now <= quote.expires_at, 'Quote expired');
 
-            // Mark quote as used
+            // Mark quote as used (state update BEFORE external calls - CEI pattern)
             let mut used_quote = quote;
             used_quote.is_valid = false;
             self.quotes.write(quote_id, used_quote);
 
-            // Transfer payment token from user
-            self._collect_payment(caller, quote.payment_token, quote.payment_amount);
-
-            // Distribute fees in SAGE
-            self._distribute_fees(quote.sage_equivalent, job_id);
-
-            // Update stats
+            // Update stats BEFORE external calls
             let total_usd = self.total_payments_usd.read();
             self.total_payments_usd.write(total_usd + quote.usd_value);
+
+            // Transfer payment token from user (external call)
+            self._collect_payment(caller, quote.payment_token, quote.payment_amount);
+
+            // Distribute fees in SAGE (external calls)
+            self._distribute_fees(quote.sage_equivalent, job_id);
 
             self.emit(PaymentExecuted {
                 quote_id,
@@ -467,6 +560,7 @@ mod PaymentRouter {
                 usd_value: quote.usd_value,
             });
 
+            self._end_nonreentrant();
             true
         }
 
@@ -475,22 +569,25 @@ mod PaymentRouter {
             amount: u256,
             job_id: u256
         ) {
+            // SECURITY: Reentrancy guard for external calls
+            self._start_nonreentrant();
+
             let caller = get_caller_address();
             let discounts = self.discount_tiers.read();
 
             // Direct SAGE payment gets discount
             let effective_amount = (amount * (BPS_DENOMINATOR + discounts.sage_discount_bps.into())) / BPS_DENOMINATOR;
 
-            // Transfer SAGE from user
-            self._collect_payment(caller, PaymentToken::SAGE, amount);
-
-            // Distribute fees
-            self._distribute_fees(effective_amount, job_id);
-
-            // Calculate USD value for stats
+            // Calculate USD value for stats and update BEFORE external calls (CEI pattern)
             let usd_value = (amount * BASE_SAGE_PRICE_USD) / USD_DECIMALS;
             let total_usd = self.total_payments_usd.read();
             self.total_payments_usd.write(total_usd + usd_value);
+
+            // Transfer SAGE from user (external call)
+            self._collect_payment(caller, PaymentToken::SAGE, amount);
+
+            // Distribute fees (external calls)
+            self._distribute_fees(effective_amount, job_id);
 
             self.emit(PaymentExecuted {
                 quote_id: 0,
@@ -501,6 +598,8 @@ mod PaymentRouter {
                 sage_equivalent: effective_amount,
                 usd_value,
             });
+
+            self._end_nonreentrant();
         }
 
         fn pay_with_staked_sage(
@@ -641,16 +740,62 @@ mod PaymentRouter {
 
         fn set_otc_config(ref self: ContractState, config: OTCConfig) {
             self._only_owner();
+
+            // Validate all token addresses are non-zero
+            assert!(!config.usdc_address.is_zero(), "Invalid USDC address");
+            assert!(!config.strk_address.is_zero(), "Invalid STRK address");
+            assert!(!config.wbtc_address.is_zero(), "Invalid WBTC address");
+            assert!(!config.sage_address.is_zero(), "Invalid SAGE address");
+            assert!(!config.oracle_address.is_zero(), "Invalid oracle address");
+            assert!(!config.staking_address.is_zero(), "Invalid staking address");
+
+            // Validate reasonable quote validity (between 1 minute and 1 hour)
+            assert!(config.quote_validity_seconds >= 60, "Quote validity too short");
+            assert!(config.quote_validity_seconds <= 3600, "Quote validity too long");
+
+            // Validate max slippage (0-10%)
+            assert!(config.max_slippage_bps <= 1000, "Max slippage too high");
+
             self.otc_config.write(config);
+        }
+
+        // === Production-grade Configuration Functions ===
+
+        fn configure(ref self: ContractState, obelysk_router: ContractAddress) {
+            self._only_owner();
+            assert!(!self.finalized.read(), "Configuration locked");
+            assert!(!obelysk_router.is_zero(), "Invalid obelysk router");
+
+            self.obelysk_router.write(obelysk_router);
+            self.configured.write(true);
+        }
+
+        fn finalize_configuration(ref self: ContractState) {
+            self._only_owner();
+            assert!(self.configured.read(), "Not configured");
+            assert!(!self.finalized.read(), "Already finalized");
+
+            self.finalized.write(true);
+        }
+
+        fn is_contract_configured(self: @ContractState) -> bool {
+            self.configured.read()
+        }
+
+        fn is_configuration_locked(self: @ContractState) -> bool {
+            self.finalized.read()
         }
 
         fn set_obelysk_router(ref self: ContractState, router: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Configuration locked");
+            assert!(!router.is_zero(), "Invalid obelysk router address");
             self.obelysk_router.write(router);
         }
 
         fn set_staker_rewards_pool(ref self: ContractState, pool: ContractAddress) {
             self._only_owner();
+            assert!(!pool.is_zero(), "Invalid staker rewards pool address");
             self.staker_rewards_pool.write(pool);
         }
 
@@ -693,6 +838,103 @@ mod PaymentRouter {
 
         fn get_worker_public_key(self: @ContractState, worker: ContractAddress) -> ECPoint {
             self.worker_public_keys.read(worker)
+        }
+
+        // ==================== UPGRADE FUNCTIONS ====================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            // Only owner can schedule upgrades
+            self._only_owner();
+
+            // Check no pending upgrade
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+
+            // Validate class hash
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            // Only owner can execute upgrades
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            // Check timelock has expired
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            // Clear pending upgrade state
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute the upgrade
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            // Only owner can cancel upgrades
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            // Clear pending upgrade state
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            // Only owner can change delay
+            self._only_owner();
+
+            // Minimum delay: 1 day (86400 seconds)
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+
+            // Maximum delay: 30 days
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+
+            self.upgrade_delay.write(delay);
         }
     }
 
@@ -967,6 +1209,19 @@ mod PaymentRouter {
                 PaymentToken::STAKED_SAGE => 'STAKED_SAGE',
                 PaymentToken::PRIVACY_CREDIT => 'PRIVACY_CREDIT',
             }
+        }
+
+        // ================ REENTRANCY GUARD ================
+
+        /// Start nonreentrant section - prevents recursive calls
+        fn _start_nonreentrant(ref self: ContractState) {
+            assert!(!self._reentrancy_guard.read(), "ReentrancyGuard: reentrant call");
+            self._reentrancy_guard.write(true);
+        }
+
+        /// End nonreentrant section - allows future calls
+        fn _end_nonreentrant(ref self: ContractState) {
+            self._reentrancy_guard.write(false);
         }
     }
 }

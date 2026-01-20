@@ -16,7 +16,7 @@
 //! - Cooldown between buybacks
 //! - Oracle price validation
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// Buyback execution configuration
 #[derive(Copy, Drop, Serde, starknet::Store)]
@@ -94,12 +94,22 @@ pub trait IBuybackEngine<TContractState> {
     fn pause(ref self: TContractState);
     fn unpause(ref self: TContractState);
     fn is_paused(self: @TContractState) -> bool;
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
 mod BuybackEngine {
     use super::{IBuybackEngine, BuybackConfig, BuybackExecution};
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_contract_address,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
     use core::num::traits::Zero;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
@@ -133,6 +143,10 @@ mod BuybackEngine {
         total_sage_purchased: u256,
         total_sage_burned: u256,
         paused: bool,
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -144,6 +158,9 @@ mod BuybackEngine {
         ContractPaused: ContractPaused,
         ContractUnpaused: ContractUnpaused,
         EmergencyWithdrawal: EmergencyWithdrawal,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -192,6 +209,31 @@ mod BuybackEngine {
         withdrawn_by: ContractAddress,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -218,6 +260,7 @@ mod BuybackEngine {
 
         self.paused.write(false);
         self.execution_count.write(0);
+        self.upgrade_delay.write(172800);
     }
 
     #[abi(embed_v0)]
@@ -390,6 +433,7 @@ mod BuybackEngine {
 
         fn set_execution_venue(ref self: ContractState, venue: ContractAddress) {
             self._only_owner();
+            assert!(!venue.is_zero(), "Invalid execution venue address");
 
             let old_venue = self.execution_venue.read();
             self.execution_venue.write(venue);
@@ -413,6 +457,82 @@ mod BuybackEngine {
 
         fn is_paused(self: @ContractState) -> bool {
             self.paused.read()
+        }
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+            self.upgrade_delay.write(delay);
         }
     }
 

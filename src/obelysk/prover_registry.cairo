@@ -16,7 +16,19 @@
 //
 // =============================================================================
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
+
+// =============================================================================
+// ERC20 Interface for SAGE Token
+// =============================================================================
+
+#[starknet::interface]
+pub trait IERC20<TContractState> {
+    fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
+    fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
+    fn transfer_from(ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256) -> bool;
+    fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
+}
 
 // =============================================================================
 // Data Types
@@ -128,6 +140,13 @@ pub trait IObelyskProverRegistry<TContractState> {
     fn get_active_provers(self: @TContractState) -> Array<ContractAddress>;
     fn get_verifier_address(self: @TContractState) -> ContractAddress;
     fn get_request(self: @TContractState, request_id: u256) -> ProofRequest;
+
+    // === Upgrade Functions ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 // =============================================================================
@@ -137,10 +156,16 @@ pub trait IObelyskProverRegistry<TContractState> {
 #[starknet::contract]
 pub mod ObelyskProverRegistry {
     use super::{
-        TeeAttestation, ProverInfo, PricingConfig, ProofRequest, 
+        TeeAttestation, ProverInfo, PricingConfig, ProofRequest,
         IObelyskProverRegistry
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        get_contract_address, syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use super::IERC20Dispatcher;
+    use super::IERC20DispatcherTrait;
+    use core::num::traits::Zero;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess,
         StoragePointerReadAccess, StoragePointerWriteAccess
@@ -182,6 +207,11 @@ pub mod ObelyskProverRegistry {
         
         /// Treasury for platform fees
         treasury: ContractAddress,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     // =========================================================================
@@ -200,6 +230,10 @@ pub mod ObelyskProverRegistry {
         ProofSubmitted: ProofSubmitted,
         ProofVerified: ProofVerified,
         ReputationUpdated: ReputationUpdated,
+        // Upgrade events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -278,6 +312,31 @@ pub mod ObelyskProverRegistry {
         pub new_reputation: u16,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -302,6 +361,9 @@ pub mod ObelyskProverRegistry {
             platform_fee_bps: 500,  // 5%
             min_stake: 1000_000_000_000_000_000_000_u256, // 1000 SAGE
         });
+
+        // Initialize upgrade delay (2 days)
+        self.upgrade_delay.write(172800);
     }
 
     // =========================================================================
@@ -406,17 +468,20 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             let mut info = self.provers.read(caller);
             assert(info.is_active, 'Prover not registered');
-            
+
+            // Transfer SAGE tokens from caller to this contract
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            let this_contract = get_contract_address();
+            let transfer_success = sage_token.transfer_from(caller, this_contract, amount);
+            assert(transfer_success, 'Token transfer failed');
+
             let new_total = info.stake + amount;
             info.stake = new_total;
             self.provers.write(caller, info);
-            
-            // TODO: Transfer SAGE tokens from caller to contract
-            // ICiroToken::transfer_from(self.sage_token.read(), caller, contract_address, amount)
-            
-            self.emit(ProverStaked { 
-                prover: caller, 
-                amount, 
+
+            self.emit(ProverStaked {
+                prover: caller,
+                amount,
                 total_stake: new_total,
             });
         }
@@ -425,17 +490,19 @@ pub mod ObelyskProverRegistry {
             let caller = get_caller_address();
             let mut info = self.provers.read(caller);
             assert(info.stake >= amount, 'Insufficient stake');
-            
+
+            // Transfer SAGE tokens back to prover
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            let transfer_success = sage_token.transfer(caller, amount);
+            assert(transfer_success, 'Token transfer failed');
+
             let remaining = info.stake - amount;
             info.stake = remaining;
             self.provers.write(caller, info);
-            
-            // TODO: Transfer SAGE tokens back to prover
-            // ICiroToken::transfer(self.sage_token.read(), caller, amount)
-            
-            self.emit(ProverUnstaked { 
-                prover: caller, 
-                amount, 
+
+            self.emit(ProverUnstaked {
+                prover: caller,
+                amount,
                 remaining_stake: remaining,
             });
         }
@@ -465,10 +532,13 @@ pub mod ObelyskProverRegistry {
             };
             
             self.proof_requests.write(request_id, request);
-            
-            // TODO: Lock SAGE payment from client
-            // ICiroToken::transfer_from(self.sage_token.read(), caller, contract_address, price)
-            
+
+            // Lock SAGE payment from client to this contract (escrow)
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            let this_contract = get_contract_address();
+            let transfer_success = sage_token.transfer_from(caller, this_contract, price);
+            assert(transfer_success, 'Payment transfer failed');
+
             self.emit(ProofRequested { 
                 request_id, 
                 client: caller, 
@@ -518,13 +588,23 @@ pub mod ObelyskProverRegistry {
             info.reputation = new_rep;
             
             self.provers.write(caller, info);
-            
-            // TODO: Pay prover (minus platform fee)
-            // let platform_fee = request.price * pricing.platform_fee_bps / 10000;
-            // let prover_payment = request.price - platform_fee;
-            // ICiroToken::transfer(self.sage_token.read(), caller, prover_payment)
-            // ICiroToken::transfer(self.sage_token.read(), self.treasury.read(), platform_fee)
-            
+
+            // Pay prover (minus platform fee)
+            let platform_fee = request.price * pricing.platform_fee_bps.into() / 10000_u256;
+            let prover_payment = request.price - platform_fee;
+
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+
+            // Transfer payment to prover
+            let prover_transfer = sage_token.transfer(caller, prover_payment);
+            assert(prover_transfer, 'Prover payment failed');
+
+            // Transfer platform fee to treasury
+            if platform_fee > 0_u256 {
+                let treasury_transfer = sage_token.transfer(self.treasury.read(), platform_fee);
+                assert(treasury_transfer, 'Treasury fee failed');
+            }
+
             self.emit(ProofVerified { request_id, success: true, prover: caller });
             self.emit(ReputationUpdated { 
                 prover: caller, 
@@ -588,6 +668,86 @@ pub mod ObelyskProverRegistry {
 
         fn get_request(self: @ContractState, request_id: u256) -> ProofRequest {
             self.proof_requests.read(request_id)
+        }
+
+        // =====================================================================
+        // UPGRADE FUNCTIONS
+        // =====================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+
+            assert!(now >= scheduled_at + delay, "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            self.upgrade_delay.write(delay);
         }
     }
 

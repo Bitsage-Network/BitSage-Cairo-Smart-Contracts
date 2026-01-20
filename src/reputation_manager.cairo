@@ -8,12 +8,10 @@
 //! - Reputation thresholds per job type
 //! - History tracking (limited to recent events)
 
-use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
 use starknet::storage::{
     StoragePointerReadAccess, StoragePointerWriteAccess,
     StorageMapReadAccess, StorageMapWriteAccess, Map
 };
-use core::num::traits::Zero;
 
 use sage_contracts::interfaces::reputation_manager::{
     IReputationManager, ReputationScore, ReputationEvent, ReputationReason,
@@ -37,15 +35,22 @@ const INACTIVITY_DECAY: i32 = -5;
 // Rate limiting (minimum seconds between updates for same worker)
 const MIN_UPDATE_INTERVAL: u64 = 60; // 1 minute
 
+// Maximum history events stored per worker (circular buffer)
+const MAX_HISTORY_PER_WORKER: u32 = 20;
+
 #[starknet::contract]
 pub mod ReputationManager {
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use core::num::traits::Zero;
     use super::{
         IReputationManager, ReputationScore, ReputationEvent, ReputationReason,
-        ReputationThreshold, WorkerRank, ContractAddress, get_caller_address,
-        get_block_timestamp, StoragePointerReadAccess, StoragePointerWriteAccess,
+        ReputationThreshold, WorkerRank,
+        StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map,
-        MIN_SCORE, MAX_SCORE, INITIAL_SCORE, INITIAL_LEVEL,
-        Zero
+        MIN_SCORE, MAX_SCORE, INITIAL_SCORE, INITIAL_LEVEL, MAX_HISTORY_PER_WORKER,
     };
 
     #[storage]
@@ -81,8 +86,17 @@ pub mod ReputationManager {
         worker_level_index: Map<felt252, u32>,      // worker_id -> index in level list
 
         // History tracking (limited to last N events per worker)
-        worker_history_count: Map<felt252, u32>,
-        // Note: Full history would require off-chain indexing via events
+        // Circular buffer: worker_id -> (index % MAX_HISTORY_PER_WORKER) -> event
+        worker_history: Map<(felt252, u32), ReputationEvent>,
+        worker_history_count: Map<felt252, u32>,  // Total events (for circular index)
+
+        // Pause mechanism for emergency situations
+        paused: bool,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -93,6 +107,11 @@ pub mod ReputationManager {
         ThresholdSet: ThresholdSet,
         AdminAdjusted: AdminAdjusted,
         InactivityDecayApplied: InactivityDecayApplied,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
+        Paused: Paused,
+        Unpaused: Unpaused,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -139,6 +158,43 @@ pub mod ReputationManager {
         pub timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct Paused {
+        by: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct Unpaused {
+        by: ContractAddress,
+        timestamp: u64,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -161,6 +217,9 @@ pub mod ReputationManager {
         self.total_score_sum.write(0);
         self.highest_score.write(0);
         self.lowest_score.write(MAX_SCORE);
+
+        // Initialize upgrade delay (2 days in seconds)
+        self.upgrade_delay.write(172800);
     }
 
     #[abi(embed_v0)]
@@ -226,6 +285,11 @@ pub mod ReputationManager {
             reason: ReputationReason,
             job_id: Option<u256>
         ) -> bool {
+            // Check if contract is paused
+            if self.paused.read() {
+                return false;
+            }
+
             // Authorization check - only CDC Pool or Job Manager can update
             let caller = get_caller_address();
             let cdc_pool = self.cdc_pool.read();
@@ -302,8 +366,23 @@ pub mod ReputationManager {
                 self._update_level_tracking(worker_id, old_level, rep.level);
             }
 
-            // Emit event with reason as felt252
+            // Store history event in circular buffer
             let reason_felt: felt252 = self._reason_to_felt(reason);
+            let history_count = self.worker_history_count.read(worker_id);
+            let history_index = history_count % MAX_HISTORY_PER_WORKER;
+
+            let history_event = ReputationEvent {
+                timestamp: current_time,
+                score_delta,
+                reason: reason_felt,
+                job_id,
+                old_score,
+                new_score,
+            };
+            self.worker_history.write((worker_id, history_index), history_event);
+            self.worker_history_count.write(worker_id, history_count + 1);
+
+            // Emit event
             self.emit(ReputationUpdated {
                 worker_id,
                 old_score,
@@ -340,9 +419,44 @@ pub mod ReputationManager {
             worker_id: felt252,
             limit: u32
         ) -> Array<ReputationEvent> {
-            // Note: Full history requires off-chain indexing via events
-            // This returns an empty array - clients should use event logs
-            array![]
+            let mut result: Array<ReputationEvent> = array![];
+
+            // Check if worker has any history
+            let history_count = self.worker_history_count.read(worker_id);
+            if history_count == 0 {
+                return result;
+            }
+
+            // Calculate how many events to return
+            let events_stored = if history_count > MAX_HISTORY_PER_WORKER {
+                MAX_HISTORY_PER_WORKER
+            } else {
+                history_count
+            };
+
+            let events_to_return = if limit > events_stored { events_stored } else { limit };
+
+            // Return events in reverse chronological order (newest first)
+            // Start from the most recent event and go backwards
+            let mut i: u32 = 0;
+            while i < events_to_return {
+                // Calculate the index of the event (circular buffer)
+                // Most recent is at (history_count - 1) % MAX_HISTORY_PER_WORKER
+                let offset = if i < history_count {
+                    (history_count - 1 - i) % MAX_HISTORY_PER_WORKER
+                } else {
+                    break;
+                };
+
+                let event = self.worker_history.read((worker_id, offset));
+                // Only include non-zero events
+                if event.timestamp != 0 {
+                    result.append(event);
+                }
+                i += 1;
+            };
+
+            result
         }
 
         fn check_reputation_threshold(
@@ -670,11 +784,129 @@ pub mod ReputationManager {
 
             (total_workers, avg_score, highest_score, lowest_score)
         }
+
+        // ============================================================================
+        // Upgrade Functions
+        // ============================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_admin();
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_admin();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_admin();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_admin();
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+            self.upgrade_delay.write(delay);
+        }
+
+        // ============================================================================
+        // Pause Functions (Emergency)
+        // ============================================================================
+
+        fn pause(ref self: ContractState) {
+            self._only_admin();
+            assert!(!self.paused.read(), "Contract is already paused");
+
+            self.paused.write(true);
+
+            self.emit(Paused {
+                by: get_caller_address(),
+                timestamp: get_block_timestamp(),
+            });
+        }
+
+        fn unpause(ref self: ContractState) {
+            self._only_admin();
+            assert!(self.paused.read(), "Contract is not paused");
+
+            self.paused.write(false);
+
+            self.emit(Unpaused {
+                by: get_caller_address(),
+                timestamp: get_block_timestamp(),
+            });
+        }
+
+        fn is_paused(self: @ContractState) -> bool {
+            self.paused.read()
+        }
     }
 
     // Internal helper functions
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        /// Check that caller is admin
+        fn _only_admin(self: @ContractState) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin can call this function");
+        }
+
         /// Calculate new score with bounds checking
         fn _calculate_new_score(self: @ContractState, current_score: u32, delta: i32) -> u32 {
             if delta >= 0 {

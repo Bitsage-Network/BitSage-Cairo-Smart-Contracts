@@ -3,7 +3,10 @@
 
 #[starknet::contract]
 mod WorkerStaking {
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess, 
@@ -32,14 +35,14 @@ mod WorkerStaking {
     // Worker stake info
     #[derive(Drop, Serde, Copy, starknet::Store)]
     pub struct StakeInfo {
-        worker_id: felt252,
-        amount: u256,
-        gpu_tier: u8,
-        has_tee: bool,
-        status: StakeStatus,
-        staked_at: u64,
-        unbond_time: u64,
-        reputation: u64,
+        pub worker_id: felt252,
+        pub amount: u256,
+        pub gpu_tier: u8,
+        pub has_tee: bool,
+        pub status: StakeStatus,
+        pub staked_at: u64,
+        pub unbond_time: u64,
+        pub reputation: u64,
     }
 
     // Slashing event info
@@ -82,6 +85,11 @@ mod WorkerStaking {
         // Treasury addresses
         treasury: ContractAddress,
         burn_address: ContractAddress,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -92,6 +100,9 @@ mod WorkerStaking {
         Unstaked: Unstaked,
         Slashed: Slashed,
         StakeIncreased: StakeIncreased,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -138,6 +149,31 @@ mod WorkerStaking {
         new_total: u256,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -170,6 +206,8 @@ mod WorkerStaking {
         self.base_stakes.write(1, 50000000000000000000000); // DataCenter: 50,000 SAGE
         self.base_stakes.write(2, 100000000000000000000000); // Enterprise: 100,000 SAGE
         self.base_stakes.write(3, 200000000000000000000000); // NextGen: 200,000 SAGE
+
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -479,6 +517,84 @@ mod WorkerStaking {
         fn get_worker_address(self: @ContractState, worker_id: felt252) -> ContractAddress {
             self.worker_addresses.read(worker_id)
         }
+
+        // =========================================================================
+        // Upgrade Functions
+        // =========================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+            assert!(new_class_hash.is_non_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let execute_after = current_time + self.upgrade_delay.read();
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+
+            let new_class_hash = self.pending_upgrade.read();
+            assert!(new_class_hash.is_non_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let current_time = get_block_timestamp();
+            assert!(current_time >= scheduled_at + self.upgrade_delay.read(), "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(new_class_hash).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+
+            let pending_hash = self.pending_upgrade.read();
+            assert!(pending_hash.is_non_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending_hash,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read(),
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+            assert!(delay >= 300, "Delay must be at least 5 min");
+            self.upgrade_delay.write(delay);
+        }
     }
 
     #[generate_trait]
@@ -528,5 +644,12 @@ pub trait IWorkerStaking<TContractState> {
     fn set_job_manager(ref self: TContractState, job_manager: starknet::ContractAddress);
     fn update_base_stake(ref self: TContractState, gpu_tier: u8, amount: u256);
     fn get_worker_address(self: @TContractState, worker_id: felt252) -> starknet::ContractAddress;
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 

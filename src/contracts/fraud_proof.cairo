@@ -3,7 +3,11 @@
 
 #[starknet::contract]
 mod FraudProof {
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess, 
         StorageMapReadAccess, StorageMapWriteAccess, Map
@@ -93,6 +97,11 @@ mod FraudProof {
         // Statistics
         total_slashed: u256,
         total_rewards_paid: u256,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -103,6 +112,9 @@ mod FraudProof {
         VoteCast: VoteCast,
         FraudDetected: FraudDetected,
         WorkerSlashed: WorkerSlashed,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -150,6 +162,31 @@ mod FraudProof {
         reason: felt252,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -174,6 +211,7 @@ mod FraudProof {
         self.critical_violation_penalty.write(5000); // 50%
         
         self.next_challenge_id.write(1);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -401,6 +439,84 @@ mod FraudProof {
             assert!(get_caller_address() == self.owner.read(), "Not owner");
             self.challenge_period.write(period);
         }
+
+        // =========================================================================
+        // Upgrade Functions
+        // =========================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+            assert!(new_class_hash.is_non_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let execute_after = current_time + self.upgrade_delay.read();
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+
+            let new_class_hash = self.pending_upgrade.read();
+            assert!(new_class_hash.is_non_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let current_time = get_block_timestamp();
+            assert!(current_time >= scheduled_at + self.upgrade_delay.read(), "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(new_class_hash).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+
+            let pending_hash = self.pending_upgrade.read();
+            assert!(pending_hash.is_non_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending_hash,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read(),
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            self.upgrade_delay.write(delay);
+        }
     }
 
     #[generate_trait]
@@ -411,32 +527,41 @@ mod FraudProof {
             challenge.status = ChallengeStatus::ValidProof;
             challenge.resolved_at = get_block_timestamp();
             self.challenges.write(challenge_id, challenge);
-            
+
             self.valid_challenges.write(self.valid_challenges.read() + 1);
-            
-            // Slash worker
-            let penalty_bps = self._determine_penalty(challenge.verification_method);
+
+            // Get worker's stake before slashing to calculate penalty amount
             let staking_contract = self.staking_contract.read();
-            
-            // Call staking contract to slash
             let staking_dispatcher = IWorkerStakingDispatcher { contract_address: staking_contract };
+            let stake_info = staking_dispatcher.get_stake(challenge.worker_id);
+
+            // Calculate penalty amount based on stake and violation severity
+            let penalty_bps = self._determine_penalty(challenge.verification_method);
+            let penalty_amount = stake_info.amount * penalty_bps.into() / 10000_u256;
+
+            // Update total slashed tracking
+            let new_total_slashed = self.total_slashed.read() + penalty_amount;
+            self.total_slashed.write(new_total_slashed);
+
+            // Call staking contract to slash
             staking_dispatcher.slash(challenge.worker_id, penalty_bps, 'fraud_proof', challenge.challenger);
-            
-            // Reward challenger (50% of slashed amount + deposit back)
+
+            // Reward challenger (deposit back + 50% of slashed amount)
             let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-            token.transfer(challenge.challenger, challenge.deposit);
-            
+            let challenger_reward = challenge.deposit + (penalty_amount / 2_u256);
+            token.transfer(challenge.challenger, challenger_reward);
+
             self.emit(ChallengeResolved {
                 challenge_id,
                 status: ChallengeStatus::ValidProof,
                 winner: challenge.challenger,
-                reward: challenge.deposit,
+                reward: challenger_reward,
             });
-            
+
             self.emit(FraudDetected {
                 job_id: challenge.job_id,
                 worker_id: challenge.worker_id,
-                penalty_amount: 0, // TODO: Calculate from slashing
+                penalty_amount,
             });
         }
 
@@ -477,15 +602,23 @@ mod FraudProof {
 
         /// Verify ZK proof via ProofVerifier oracle
         fn _verify_zk_proof(self: @ContractState, proof_hash: felt252, result_hash: felt252) -> bool {
-            let _ = result_hash; // TODO: Verify proof matches result hash
             let proof_verifier = IProofVerifierDispatcher { contract_address: self.proof_verifier.read() };
             let job_id = ProofJobId { value: proof_hash.into() };
-            
+
+            // Verify proof is verified on-chain
             let status = proof_verifier.get_proof_status(job_id);
-            match status {
+            let is_verified = match status {
                 ProofStatus::Verified => true,
                 _ => false
+            };
+
+            if !is_verified {
+                return false;
             }
+
+            // Verify proof's public input hash matches the expected result hash
+            let job_spec = proof_verifier.get_proof_job(job_id);
+            job_spec.public_input_hash == result_hash
         }
 
         /// Verify TEE attestation via ProofVerifier oracle
@@ -523,5 +656,12 @@ pub trait IFraudProof<TContractState> {
     fn set_proof_verifier(ref self: TContractState, proof_verifier: starknet::ContractAddress);
     fn update_challenge_deposit(ref self: TContractState, amount: u256);
     fn update_challenge_period(ref self: TContractState, period: u64);
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 

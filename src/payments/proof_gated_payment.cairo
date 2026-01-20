@@ -5,7 +5,7 @@
 // Connects ProofVerifier → PaymentRouter
 // Payments only flow after proof verification (STWO or TEE)
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// Payment verification source
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
@@ -120,27 +120,58 @@ pub trait IProofGatedPayment<TContractState> {
     /// Check if job is ready for payment
     fn is_payment_ready(self: @TContractState, job_id: u256) -> bool;
 
-    /// Admin: Set payment router address
+    // === Configuration Functions (Production-grade initialization) ===
+
+    /// Configure all circular dependencies at once. Can only be called before finalize().
+    /// This is the production-grade pattern to avoid deploying with placeholder addresses.
+    fn configure(
+        ref self: TContractState,
+        payment_router: ContractAddress,
+        optimistic_tee: ContractAddress,
+        job_manager: ContractAddress,
+        stwo_verifier: ContractAddress
+    );
+
+    /// Finalize configuration - locks all dependency addresses permanently.
+    /// After calling this, configure() and individual setters will revert.
+    fn finalize(ref self: TContractState);
+
+    /// Check if contract is configured
+    fn is_configured(self: @TContractState) -> bool;
+
+    /// Check if contract is finalized (configuration locked)
+    fn is_finalized(self: @TContractState) -> bool;
+
+    // === Legacy Admin Setters (work only before finalize) ===
+
+    /// Admin: Set payment router address (deprecated, use configure())
     fn set_payment_router(ref self: TContractState, router: ContractAddress);
 
     /// Admin: Set proof verifier address
     fn set_proof_verifier(ref self: TContractState, verifier: ContractAddress);
 
-    /// Admin: Set optimistic TEE address
+    /// Admin: Set optimistic TEE address (deprecated, use configure())
     fn set_optimistic_tee(ref self: TContractState, tee: ContractAddress);
 
     /// Admin: Set hourly rate in SAGE
     fn set_hourly_rate(ref self: TContractState, rate: u256);
 
-    /// Admin: Set JobManager address (for authorized job registration)
+    /// Admin: Set JobManager address (deprecated, use configure())
     fn set_job_manager(ref self: TContractState, job_manager: ContractAddress);
 
-    /// Admin: Set STWO verifier address (for callback authorization)
+    /// Admin: Set STWO verifier address (deprecated, use configure())
     fn set_stwo_verifier(ref self: TContractState, stwo_verifier: ContractAddress);
 
     /// Called by STWO verifier when proof is verified - marks job ready for payment
     /// This is the callback entry point from StwoVerifier.submit_and_verify()
     fn mark_proof_verified(ref self: TContractState, job_id: u256);
+
+    // === Upgrade Functions ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
@@ -149,18 +180,20 @@ mod ProofGatedPayment {
         IProofGatedPayment, VerificationSource, PaymentStatus,
         JobPaymentRecord, ComputeCheckpoint
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
     };
     use core::num::traits::Zero;
-    use core::poseidon::poseidon_hash_span;
 
     // Import interfaces for cross-contract calls
     use sage_contracts::interfaces::proof_verifier::{
         IProofVerifierDispatcher, IProofVerifierDispatcherTrait,
-        ProofJobId, ProofStatus
+        ProofJobId,
     };
     use sage_contracts::payments::payment_router::{
         IPaymentRouterDispatcher, IPaymentRouterDispatcherTrait
@@ -173,11 +206,16 @@ mod ProofGatedPayment {
     #[storage]
     struct Storage {
         owner: ContractAddress,
-        payment_router: ContractAddress,
         proof_verifier: ContractAddress,
+
+        // Configuration state - production-grade initialization pattern
+        // These are set via configure() and locked via finalize()
+        payment_router: ContractAddress,
         optimistic_tee: ContractAddress,
-        job_manager: ContractAddress,  // PHASE 3: JobManager can register payments
-        stwo_verifier: ContractAddress, // STWO verifier for callback
+        job_manager: ContractAddress,
+        stwo_verifier: ContractAddress,
+        configured: bool,   // True once configure() is called with all deps
+        finalized: bool,    // True once finalize() is called - locks configuration forever
 
         // Job payment tracking
         job_payments: Map<u256, JobPaymentRecord>,
@@ -196,6 +234,11 @@ mod ProofGatedPayment {
         total_payments_released: u256,
         total_checkpoints_verified: u64,
         total_sage_distributed: u256,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -209,6 +252,9 @@ mod ProofGatedPayment {
         CheckpointVerified: CheckpointVerified,
         CheckpointPaid: CheckpointPaid,
         DisputeResolved: DisputeResolved,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -285,20 +331,49 @@ mod ProofGatedPayment {
         timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        payment_router: ContractAddress,
-        proof_verifier: ContractAddress,
-        optimistic_tee: ContractAddress
+        proof_verifier: ContractAddress
     ) {
+        // Production-grade: Only immutable dependencies in constructor
+        // Circular dependencies set via configure() after deployment
+        assert!(!owner.is_zero(), "Invalid owner address");
+        assert!(!proof_verifier.is_zero(), "Invalid proof verifier address");
+
         self.owner.write(owner);
-        self.payment_router.write(payment_router);
         self.proof_verifier.write(proof_verifier);
-        self.optimistic_tee.write(optimistic_tee);
         self.hourly_rate_sage.write(DEFAULT_HOURLY_RATE);
         self.checkpoint_counter.write(0);
+        self.upgrade_delay.write(172800); // 2 days
+        self.configured.write(false);
+        self.finalized.write(false);
     }
 
     #[abi(embed_v0)]
@@ -554,33 +629,89 @@ mod ProofGatedPayment {
             record.status == PaymentStatus::ProofVerified
         }
 
+        // === Production-grade Configuration Functions ===
+
+        fn configure(
+            ref self: ContractState,
+            payment_router: ContractAddress,
+            optimistic_tee: ContractAddress,
+            job_manager: ContractAddress,
+            stwo_verifier: ContractAddress
+        ) {
+            self._only_owner();
+            assert!(!self.finalized.read(), "Contract is finalized");
+
+            // Validate all addresses
+            assert!(!payment_router.is_zero(), "Invalid payment router");
+            assert!(!optimistic_tee.is_zero(), "Invalid optimistic TEE");
+            assert!(!job_manager.is_zero(), "Invalid job manager");
+            assert!(!stwo_verifier.is_zero(), "Invalid STWO verifier");
+
+            // Set all circular dependencies at once
+            self.payment_router.write(payment_router);
+            self.optimistic_tee.write(optimistic_tee);
+            self.job_manager.write(job_manager);
+            self.stwo_verifier.write(stwo_verifier);
+            self.configured.write(true);
+        }
+
+        fn finalize(ref self: ContractState) {
+            self._only_owner();
+            assert!(self.configured.read(), "Contract not configured");
+            assert!(!self.finalized.read(), "Already finalized");
+
+            // Permanently lock configuration
+            self.finalized.write(true);
+        }
+
+        fn is_configured(self: @ContractState) -> bool {
+            self.configured.read()
+        }
+
+        fn is_finalized(self: @ContractState) -> bool {
+            self.finalized.read()
+        }
+
+        // === Legacy Setters (deprecated, work only before finalize) ===
+
         fn set_payment_router(ref self: ContractState, router: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Contract is finalized");
+            assert!(!router.is_zero(), "Invalid payment router address");
             self.payment_router.write(router);
         }
 
         fn set_proof_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Contract is finalized");
+            assert!(!verifier.is_zero(), "Invalid proof verifier address");
             self.proof_verifier.write(verifier);
         }
 
         fn set_optimistic_tee(ref self: ContractState, tee: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Contract is finalized");
+            assert!(!tee.is_zero(), "Invalid optimistic TEE address");
             self.optimistic_tee.write(tee);
         }
 
         fn set_hourly_rate(ref self: ContractState, rate: u256) {
             self._only_owner();
+            assert!(rate > 0, "Hourly rate must be positive");
             self.hourly_rate_sage.write(rate);
         }
 
         fn set_job_manager(ref self: ContractState, job_manager: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Contract is finalized");
+            assert!(!job_manager.is_zero(), "Invalid job manager address");
             self.job_manager.write(job_manager);
         }
 
         fn set_stwo_verifier(ref self: ContractState, stwo_verifier: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Contract is finalized");
+            assert!(!stwo_verifier.is_zero(), "Invalid STWO verifier address");
             self.stwo_verifier.write(stwo_verifier);
         }
 
@@ -610,6 +741,81 @@ mod ProofGatedPayment {
 
             // Auto-release payment after verification
             self._execute_payment(job_id);
+        }
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending == zero_hash, 'Upgrade already pending');
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after: now + delay,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending != zero_hash, 'No pending upgrade');
+
+            let now = get_block_timestamp();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            assert(now >= scheduled_at + delay, 'Timelock not expired');
+
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+
+            replace_class_syscall(pending).unwrap_syscall();
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending != zero_hash, 'No pending upgrade');
+
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let execute_after = if scheduled_at > 0 { scheduled_at + delay } else { 0 };
+            (pending, scheduled_at, execute_after)
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            self.upgrade_delay.write(delay);
         }
     }
 

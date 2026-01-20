@@ -324,7 +324,7 @@ pub fn verify_fri_query_consistency(
         }
 
         let layer = *layer_commitments[layer_idx];
-        let next_layer = *layer_commitments[layer_idx + 1];
+        let _next_layer = *layer_commitments[layer_idx + 1];
 
         // Get values for this layer
         let v0 = *query_values[value_offset];

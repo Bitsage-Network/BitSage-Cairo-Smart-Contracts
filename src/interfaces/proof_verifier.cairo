@@ -125,4 +125,11 @@ pub trait IProofVerifier<TContractState> {
     fn withdraw_stake(ref self: TContractState, amount: u256);
     fn is_enclave_whitelisted(self: @TContractState, enclave_measurement: felt252) -> bool;
     fn whitelist_enclave(ref self: TContractState, enclave_measurement: felt252, valid: bool);
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }

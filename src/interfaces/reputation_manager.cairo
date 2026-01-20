@@ -1,6 +1,8 @@
 //! Reputation Manager Interface for SAGE Network
 //! Central reputation management system for worker ranking and job allocation
 
+use starknet::ClassHash;
+
 /// Reputation score with detailed tracking
 #[derive(Copy, Drop, Serde, starknet::Store)]
 pub struct ReputationScore {
@@ -176,4 +178,41 @@ pub trait IReputationManager<TContractState> {
     /// Get reputation statistics for the network
     /// @return: Network-wide reputation statistics
     fn get_network_stats(self: @TContractState) -> (u32, u32, u32, u32); // (total_workers, avg_score, highest_score, lowest_score)
+
+    // ============================================================================
+    // Upgrade Functions
+    // ============================================================================
+
+    /// Schedule a contract upgrade with timelock delay
+    /// @param new_class_hash: ClassHash of the new implementation
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// Execute a scheduled upgrade after timelock has passed
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a scheduled upgrade before execution
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get upgrade governance info
+    /// @return: (pending_class_hash, scheduled_at, upgrade_delay)
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+
+    /// Set the upgrade timelock delay (1-30 days)
+    /// @param delay: New delay in seconds
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
+
+    // ============================================================================
+    // Pause Functions (Emergency)
+    // ============================================================================
+
+    /// Pause the contract (admin only)
+    /// When paused, reputation updates are blocked
+    fn pause(ref self: TContractState);
+
+    /// Unpause the contract (admin only)
+    fn unpause(ref self: TContractState);
+
+    /// Check if contract is paused
+    /// @return: True if paused
+    fn is_paused(self: @TContractState) -> bool;
 } 

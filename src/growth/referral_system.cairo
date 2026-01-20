@@ -13,7 +13,7 @@
 //! - Gold (50+ referrals): 20% of fees
 //! - Platinum (200+ referrals): 25% of fees
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// Referrer tier based on performance
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
@@ -175,6 +175,13 @@ pub trait IReferralSystem<TContractState> {
 
     /// Emergency withdraw
     fn emergency_withdraw(ref self: TContractState, token: ContractAddress, amount: u256);
+
+    // === Upgrade ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
@@ -182,7 +189,10 @@ mod ReferralSystem {
     use super::{
         IReferralSystem, ReferrerTier, ReferrerProfile, ReferredUser, ReferralConfig
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
@@ -221,6 +231,11 @@ mod ReferralSystem {
 
         // Nonce for generating codes
         code_nonce: u256,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -232,6 +247,9 @@ mod ReferralSystem {
         RewardsClaimed: RewardsClaimed,
         TierUpgrade: TierUpgrade,
         ConfigUpdated: ConfigUpdated,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -285,6 +303,31 @@ mod ReferralSystem {
         updated_by: ContractAddress,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -310,6 +353,7 @@ mod ReferralSystem {
         });
 
         self.code_nonce.write(1);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -641,6 +685,80 @@ mod ReferralSystem {
 
             let token_dispatcher = IERC20Dispatcher { contract_address: token };
             token_dispatcher.transfer(self.owner.read(), amount);
+        }
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+            assert!(self.pending_upgrade.read().is_zero(), "Upgrade already scheduled");
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let new_class_hash = self.pending_upgrade.read();
+            assert!(!new_class_hash.is_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+            assert!(now >= scheduled_at + delay, "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(new_class_hash).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            self.upgrade_delay.write(delay);
         }
     }
 

@@ -5,7 +5,7 @@
 //! 1. AI/ML training & inference (market-based $/GPU-hour)
 //! 2. ZK proof generation for Starknet (deterministic $/batch)
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 use core::array::Array;
 
 // Enhanced Job ID system supporting multiple job types
@@ -155,12 +155,25 @@ pub trait IJobManager<TContractState> {
         client: ContractAddress
     ) -> JobId;
 
-    /// Assign a job to a specific worker
+    /// Assign a job to a specific worker (admin only)
     fn assign_job_to_worker(
         ref self: TContractState,
         job_id: JobId,
         worker_id: WorkerId
     );
+
+    /// Claim a job directly (decentralized - any registered worker can claim)
+    /// Workers call this to claim available jobs without coordinator
+    fn claim_job(
+        ref self: TContractState,
+        job_id: JobId
+    );
+
+    /// Get list of pending job IDs (for workers to find available work)
+    fn get_pending_jobs(self: @TContractState, offset: u64, limit: u64) -> Array<JobId>;
+
+    /// Get count of pending jobs
+    fn get_pending_job_count(self: @TContractState) -> u64;
 
     /// Submit job execution results
     fn submit_job_result(
@@ -269,4 +282,56 @@ pub trait IJobManager<TContractState> {
 
     /// Check if proof is verified and payment is ready for a job
     fn is_proof_payment_ready(self: @TContractState, job_id: JobId) -> bool;
+
+    // ============================================================================
+    // Contract Integration Setup Functions
+    // ============================================================================
+
+    /// Admin: Set ReputationManager contract address
+    /// @param reputation_manager: The ReputationManager contract address (cannot be zero)
+    fn set_reputation_manager(ref self: TContractState, reputation_manager: ContractAddress);
+
+    /// Admin: Set CDC Pool contract address
+    /// @param cdc_pool: The CDC Pool contract address (cannot be zero)
+    fn set_cdc_pool_contract(ref self: TContractState, cdc_pool: ContractAddress);
+
+    /// Get integration contract addresses
+    /// @return (reputation_manager, cdc_pool, proof_gated_payment)
+    fn get_integration_contracts(self: @TContractState) -> (ContractAddress, ContractAddress, ContractAddress);
+
+    // ============================================================================
+    // Circuit Breaker Functions
+    // ============================================================================
+
+    /// Admin: Enable circuit breaker to skip CDC Pool calls (for emergency use)
+    /// @param duration: How long to keep circuit breaker active (in seconds)
+    fn enable_cdc_pool_circuit_breaker(ref self: TContractState, duration: u64);
+
+    /// Admin: Disable circuit breaker to resume CDC Pool calls
+    fn disable_cdc_pool_circuit_breaker(ref self: TContractState);
+
+    /// Check if circuit breaker is currently active
+    /// @return (is_active, expires_at)
+    fn get_circuit_breaker_status(self: @TContractState) -> (bool, u64);
+
+    // ============================================================================
+    // Upgrade Functions
+    // ============================================================================
+
+    /// Schedule a contract upgrade with timelock
+    /// @param new_class_hash: The new class hash to upgrade to
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// Execute a scheduled upgrade after timelock expires
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a pending upgrade
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get upgrade information (pending_class_hash, scheduled_at, delay)
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+
+    /// Set the upgrade timelock delay
+    /// @param delay: New delay in seconds (must be between 1 and 30 days)
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 } 

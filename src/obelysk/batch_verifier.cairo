@@ -32,7 +32,7 @@ pub struct BatchConfig {
     pub min_security_bits: u32,
 }
 
-impl BatchConfigDefault of Default<BatchConfig> {
+pub impl BatchConfigDefault of Default<BatchConfig> {
     fn default() -> BatchConfig {
         BatchConfig {
             max_batch_size: 50,

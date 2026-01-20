@@ -32,7 +32,8 @@ use sage_contracts::interfaces::cdc_pool::{
     ICDCPool, WorkerCapabilities, WorkerProfile, WorkerStatus, PerformanceMetrics,
     StakeInfo, UnstakeRequest, AllocationResult, SlashRecord, SlashReason, WorkerTier,
     WorkerTierBenefits, HolderTier, WorkerRegistered, WorkerDeactivated, WorkerReactivated,
-    StakeAdded, UnstakeRequested, UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased
+    StakeAdded, UnstakeRequested, UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased,
+    DisputeRecord, DisputeStatus
 };
 use sage_contracts::interfaces::job_manager::{JobId, ModelRequirements, WorkerId};
 
@@ -45,12 +46,18 @@ mod CDCPool {
         ICDCPool, WorkerCapabilities, WorkerProfile, WorkerStatus, PerformanceMetrics,
         StakeInfo, UnstakeRequest, AllocationResult, SlashRecord, SlashReason, WorkerTier,
         WorkerTierBenefits, HolderTier, ContractAddress, get_caller_address, get_block_timestamp,
-        StoragePointerReadAccess, StoragePointerWriteAccess, 
+        StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map,
         JobId, ModelRequirements, WorkerId, IERC20Dispatcher, IERC20DispatcherTrait,
         WorkerRegistered, WorkerDeactivated, WorkerReactivated, StakeAdded, UnstakeRequested,
-        UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased
+        UnstakeExecuted, JobAllocated, WorkerReserved, WorkerReleased,
+        DisputeRecord, DisputeStatus
     };
+    use starknet::{
+        ClassHash,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use core::num::traits::Zero;
 
     // Helper constants
     const ZERO_ADDRESS: felt252 = 0;
@@ -81,6 +88,11 @@ mod CDCPool {
         next_unstake_id: felt252,
         total_staked: u256,
         min_stake: u256,
+
+        // Per-worker unstake request tracking (for efficient lookup)
+        worker_unstake_ids: Map<(ContractAddress, u32), felt252>, // (worker, index) -> unstake_id
+        worker_unstake_count: Map<ContractAddress, u32>,           // worker -> count of pending requests
+        unstake_completed: Map<felt252, bool>,                     // unstake_id -> is_completed
         
         // Reputation and performance tracking
         worker_reputation: Map<felt252, u64>,
@@ -96,7 +108,15 @@ mod CDCPool {
         slash_records: Map<felt252, SlashRecord>,
         next_slash_id: felt252,
         slash_percentages: Map<u8, u8>, // reason -> percentage
-        
+
+        // Dispute records for slash challenges
+        dispute_records: Map<felt252, DisputeRecord>,
+        next_dispute_id: felt252,
+        slash_to_dispute: Map<felt252, felt252>, // slash_id -> dispute_id (0 if no dispute)
+        dispute_bond: u256,         // SAGE tokens required to file dispute
+        dispute_window: u64,        // Time window to file dispute (seconds)
+        dispute_resolution_time: u64, // Time to resolve dispute (seconds)
+
         // Rewards
         pending_rewards: Map<felt252, u256>,
         base_reward_rate: u256,
@@ -110,6 +130,16 @@ mod CDCPool {
         // Network stats
         total_jobs_processed: u32,
         last_heartbeat: Map<felt252, u64>, // worker_id -> timestamp
+
+        // Worker deactivation protection
+        worker_active_jobs: Map<felt252, u32>, // worker_id -> active job count
+        deactivation_cooldown: u64,             // Cooldown period before deactivation takes effect
+        worker_last_job_completed: Map<felt252, u64>, // worker_id -> timestamp of last job completion
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -124,6 +154,61 @@ mod CDCPool {
         JobAllocated: JobAllocated,
         WorkerReserved: WorkerReserved,
         WorkerReleased: WorkerReleased,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
+        DisputeFiled: DisputeFiled,
+        DisputeResolved: DisputeResolved,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct DisputeFiled {
+        #[key]
+        dispute_id: felt252,
+        #[key]
+        slash_id: felt252,
+        challenger: ContractAddress,
+        worker_id: felt252,
+        bond_amount: u256,
+        evidence_hash: felt252,
+        deadline: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct DisputeResolved {
+        #[key]
+        dispute_id: felt252,
+        #[key]
+        slash_id: felt252,
+        upheld: bool,
+        resolver: ContractAddress,
+        resolution_reason: felt252,
+        bond_returned: bool,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
     }
 
     #[constructor]
@@ -159,6 +244,18 @@ mod CDCPool {
         self.slash_percentages.write(2, 20); // Poor Performance: 20%
         self.slash_percentages.write(3, 30); // Protocol Violation: 30%
         self.slash_percentages.write(4, 100); // Fraud: 100%
+
+        // Initialize dispute parameters
+        self.next_dispute_id.write(1);
+        self.dispute_bond.write(100000000000000000000); // 100 SAGE bond required
+        self.dispute_window.write(259200); // 3 days to file dispute
+        self.dispute_resolution_time.write(604800); // 7 days to resolve
+
+        // Initialize deactivation cooldown (1 hour after last job)
+        self.deactivation_cooldown.write(3600);
+
+        // Initialize upgrade delay (2 days in seconds)
+        self.upgrade_delay.write(172800);
     }
 
     #[abi(embed_v0)]
@@ -250,14 +347,31 @@ mod CDCPool {
             // Cairo 2.12.0: Enhanced validation with better error context
             let owner = self.worker_owners.read(worker_key);
             assert!(owner == caller, "Not worker owner");
-            
+
+            // SECURITY: Prevent self-deactivation if worker has active jobs
+            let active_jobs = self.worker_active_jobs.read(worker_key);
+            assert!(active_jobs == 0, "Cannot deactivate with active jobs");
+
+            // SECURITY: Enforce cooldown after last job to prevent slash avoidance
+            let last_job_time = self.worker_last_job_completed.read(worker_key);
+            let current_time = get_block_timestamp();
+            let cooldown = self.deactivation_cooldown.read();
+
+            // If worker has ever completed a job, enforce cooldown
+            if last_job_time > 0 {
+                assert!(
+                    current_time >= last_job_time + cooldown,
+                    "Must wait for cooldown after job completion"
+                );
+            }
+
             let current_status = self.worker_status.read(worker_key);
             if current_status == WorkerStatus::Active {
                 self.active_workers.write(self.active_workers.read() - 1);
             }
-            
+
             self.worker_status.write(worker_key, WorkerStatus::Inactive);
-            
+
             self.emit(Event::WorkerDeactivated(WorkerDeactivated {
                 worker_id,
                 reason,
@@ -328,26 +442,31 @@ mod CDCPool {
             let stake_info = self.stakes.read(caller);
             // Cairo 2.12.0: Better stake validation with clear error messages
             assert!(stake_info.amount >= amount, "Insufficient stake");
-            
+
             let unlock_time = get_block_timestamp() + 604800; // 7 days
             let unstake_id = self.next_unstake_id.read();
-            
+
             let request = UnstakeRequest {
                 worker: caller,
                 amount,
                 unlock_time,
                 is_complete_exit: stake_info.amount == amount,
             };
-            
+
             self.unstake_requests.write(unstake_id, request);
             self.next_unstake_id.write(unstake_id + 1);
-            
+
+            // Track this request for the worker (for efficient lookup)
+            let worker_request_count = self.worker_unstake_count.read(caller);
+            self.worker_unstake_ids.write((caller, worker_request_count), unstake_id);
+            self.worker_unstake_count.write(caller, worker_request_count + 1);
+
             self.emit(Event::UnstakeRequested(UnstakeRequested {
                 worker: caller,
                 amount,
                 unlock_time,
             }));
-            
+
             unlock_time
         }
 
@@ -359,30 +478,57 @@ mod CDCPool {
 
         fn complete_unstake(ref self: ContractState) {
             let caller = get_caller_address();
-            // Find and process unstake request for caller
-            // Simplified implementation - in reality would need to track individual requests
-            let stake_info = self.stakes.read(caller);
-            
-            if stake_info.locked_until <= get_block_timestamp() {
-                let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                sage_token.transfer(caller, stake_info.amount);
-                
-                let empty_stake = StakeInfo {
-                    amount: 0,
-                    usd_value: 0,
-                    tier: WorkerTier::Basic,
-                    locked_until: 0,
-                    last_adjustment: 0,
-                    last_reward_block: 0,
-                    delegated_amount: 0,
-                    performance_score: 0,
-                };
-                self.stakes.write(caller, empty_stake);
-                
-                self.emit(Event::UnstakeExecuted(UnstakeExecuted {
-                    worker: caller,
-                    amount: stake_info.amount,
-                }));
+            let current_time = get_block_timestamp();
+            let mut stake_info = self.stakes.read(caller);
+            let request_count = self.worker_unstake_count.read(caller);
+
+            let mut total_unstaked: u256 = 0;
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+
+            // Process all matured unstake requests for the caller
+            let mut i: u32 = 0;
+            while i < request_count {
+                let unstake_id = self.worker_unstake_ids.read((caller, i));
+
+                // Skip if already completed
+                if self.unstake_completed.read(unstake_id) {
+                    i += 1;
+                    continue;
+                }
+
+                let request = self.unstake_requests.read(unstake_id);
+
+                // Check if the request has matured
+                if request.unlock_time <= current_time && request.worker == caller {
+                    // Mark as completed
+                    self.unstake_completed.write(unstake_id, true);
+                    total_unstaked += request.amount;
+
+                    self.emit(Event::UnstakeExecuted(UnstakeExecuted {
+                        worker: caller,
+                        amount: request.amount,
+                    }));
+                }
+                i += 1;
+            };
+
+            // Transfer all matured unstake amounts
+            if total_unstaked > 0 {
+                sage_token.transfer(caller, total_unstaked);
+
+                // Update stake info
+                if stake_info.amount >= total_unstaked {
+                    stake_info.amount -= total_unstaked;
+                } else {
+                    stake_info.amount = 0;
+                }
+                self.stakes.write(caller, stake_info);
+
+                // Update total staked
+                let current_total = self.total_staked.read();
+                if current_total >= total_unstaked {
+                    self.total_staked.write(current_total - total_unstaked);
+                }
             }
         }
 
@@ -500,7 +646,11 @@ mod CDCPool {
             let end_time = get_block_timestamp() + duration;
             let job_key: felt252 = job_id.value.try_into().unwrap();
             self.reserved_workers.write((worker_id.value, job_key), end_time);
-            
+
+            // Track active job count for deactivation protection
+            let current_active = self.worker_active_jobs.read(worker_id.value);
+            self.worker_active_jobs.write(worker_id.value, current_active + 1);
+
             self.emit(Event::WorkerReserved(WorkerReserved {
                 worker_id,
                 job_id,
@@ -511,7 +661,16 @@ mod CDCPool {
         fn release_worker(ref self: ContractState, worker_id: WorkerId, job_id: JobId) {
             let job_key: felt252 = job_id.value.try_into().unwrap();
             self.reserved_workers.write((worker_id.value, job_key), 0);
-            
+
+            // Decrement active job count
+            let current_active = self.worker_active_jobs.read(worker_id.value);
+            if current_active > 0 {
+                self.worker_active_jobs.write(worker_id.value, current_active - 1);
+            }
+
+            // Update last job completed timestamp for cooldown enforcement
+            self.worker_last_job_completed.write(worker_id.value, get_block_timestamp());
+
             self.emit(Event::WorkerReleased(WorkerReleased {
                 worker_id,
                 job_id: job_id,
@@ -620,29 +779,146 @@ mod CDCPool {
 
         fn challenge_slash(
             ref self: ContractState,
-            worker_id: WorkerId,
-            evidence: Array<felt252>
-        ) {
-            // Simplified implementation - in reality would start dispute process
+            slash_id: felt252,
+            evidence_hash: felt252
+        ) -> felt252 {
             let caller = get_caller_address();
-            let worker_key = worker_id.value;
-            let owner = self.worker_owners.read(worker_key);
+            let current_time = get_block_timestamp();
+
+            // Get the slash record
+            let slash_record = self.slash_records.read(slash_id);
+            assert!(!slash_record.worker.is_zero(), "Slash record not found");
+
+            // Verify caller is the slashed worker's owner
+            // Find worker_id from slash record worker address
+            let worker_id = self.owner_to_worker.read(slash_record.worker);
+            assert!(worker_id != 0, "Worker not found");
+            let owner = self.worker_owners.read(worker_id);
             assert!(owner == caller, "Not worker owner");
+
+            // Check dispute window hasn't expired
+            let dispute_window = self.dispute_window.read();
+            assert!(
+                current_time <= slash_record.timestamp + dispute_window,
+                "Dispute window expired"
+            );
+
+            // Check no existing dispute for this slash
+            let existing_dispute = self.slash_to_dispute.read(slash_id);
+            assert!(existing_dispute == 0, "Slash already disputed");
+
+            // Collect dispute bond from challenger
+            let bond_amount = self.dispute_bond.read();
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            let transfer_success = sage_token.transfer_from(caller, starknet::get_contract_address(), bond_amount);
+            assert!(transfer_success, "Bond transfer failed");
+
+            // Create dispute record
+            let dispute_id = self.next_dispute_id.read();
+            let resolution_deadline = current_time + self.dispute_resolution_time.read();
+
+            let dispute_record = DisputeRecord {
+                slash_id,
+                worker_id,
+                challenger: caller,
+                evidence_hash,
+                dispute_bond: bond_amount,
+                filed_at: current_time,
+                deadline: resolution_deadline,
+                status: DisputeStatus::Pending,
+                resolver: Zero::zero(),
+                resolution_reason: 0,
+            };
+
+            self.dispute_records.write(dispute_id, dispute_record);
+            self.slash_to_dispute.write(slash_id, dispute_id);
+            self.next_dispute_id.write(dispute_id + 1);
+
+            // Change worker status to disputed (not slashed)
+            self.worker_status.write(worker_id, WorkerStatus::Inactive);
+
+            self.emit(DisputeFiled {
+                dispute_id,
+                slash_id,
+                challenger: caller,
+                worker_id,
+                bond_amount,
+                evidence_hash,
+                deadline: resolution_deadline,
+            });
+
+            dispute_id
         }
 
         fn resolve_slash_challenge(
             ref self: ContractState,
-            worker_id: WorkerId,
-            upheld: bool
+            dispute_id: felt252,
+            upheld: bool,
+            resolution_reason: felt252
         ) {
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Only admin can resolve");
-            
-            if !upheld {
-                // Restore worker status
-                let worker_key = worker_id.value;
-                self.worker_status.write(worker_key, WorkerStatus::Active);
+
+            // Get dispute record
+            let mut dispute = self.dispute_records.read(dispute_id);
+            assert!(dispute.status == DisputeStatus::Pending, "Dispute not pending");
+
+            let slash_record = self.slash_records.read(dispute.slash_id);
+            let sage_token = IERC20Dispatcher { contract_address: self.sage_token.read() };
+            let mut bond_returned = false;
+
+            if upheld {
+                // Slash is upheld - burn the bond and keep worker slashed
+                dispute.status = DisputeStatus::Resolved;
+                self.worker_status.write(dispute.worker_id, WorkerStatus::Slashed);
+                // Bond is forfeited (stays in contract or could be burned)
+            } else {
+                // Slash is overturned - return bond and restore worker
+                dispute.status = DisputeStatus::Overturned;
+
+                // Return the dispute bond to challenger
+                let transfer_success = sage_token.transfer(dispute.challenger, dispute.dispute_bond);
+                assert!(transfer_success, "Bond return failed");
+                bond_returned = true;
+
+                // Restore worker status to active
+                self.worker_status.write(dispute.worker_id, WorkerStatus::Active);
+
+                // Return the slashed amount to worker
+                let worker_owner = self.worker_owners.read(dispute.worker_id);
+                let mut stake_info = self.stakes.read(worker_owner);
+                stake_info.amount += slash_record.amount;
+                self.stakes.write(worker_owner, stake_info);
             }
+
+            dispute.resolver = caller;
+            dispute.resolution_reason = resolution_reason;
+            self.dispute_records.write(dispute_id, dispute);
+
+            self.emit(DisputeResolved {
+                dispute_id,
+                slash_id: dispute.slash_id,
+                upheld,
+                resolver: caller,
+                resolution_reason,
+                bond_returned,
+            });
+        }
+
+        fn get_dispute(self: @ContractState, dispute_id: felt252) -> DisputeRecord {
+            self.dispute_records.read(dispute_id)
+        }
+
+        fn get_slash_record(self: @ContractState, slash_id: felt252) -> SlashRecord {
+            self.slash_records.read(slash_id)
+        }
+
+        fn get_dispute_bond(self: @ContractState) -> u256 {
+            self.dispute_bond.read()
+        }
+
+        fn get_dispute_window(self: @ContractState) -> u64 {
+            self.dispute_window.read()
         }
 
         // Reward Distribution Functions
@@ -788,8 +1064,30 @@ mod CDCPool {
             self: @ContractState,
             worker: ContractAddress
         ) -> Array<UnstakeRequest> {
-            // Simplified - would need to track per-worker requests
-            array![]
+            let mut result: Array<UnstakeRequest> = array![];
+
+            let request_count = self.worker_unstake_count.read(worker);
+            if request_count == 0 {
+                return result;
+            }
+
+            // Iterate through worker's unstake requests
+            let mut i: u32 = 0;
+            while i < request_count {
+                let unstake_id = self.worker_unstake_ids.read((worker, i));
+
+                // Only include non-completed requests
+                if !self.unstake_completed.read(unstake_id) {
+                    let request = self.unstake_requests.read(unstake_id);
+                    // Verify the request is valid (non-zero worker)
+                    if !request.worker.is_zero() {
+                        result.append(request);
+                    }
+                }
+                i += 1;
+            };
+
+            result
         }
 
         fn get_unstake_requests(
@@ -991,14 +1289,96 @@ mod CDCPool {
         ) {
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Only admin");
-            
+
             let worker_key = worker_id.value;
             self.worker_status.write(worker_key, WorkerStatus::Banned);
-            
+
             let current_status = self.worker_status.read(worker_key);
             if current_status == WorkerStatus::Active {
                 self.active_workers.write(self.active_workers.read() - 1);
             }
+        }
+
+        // Upgrade Functions
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin");
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin");
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin");
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Only admin");
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+            self.upgrade_delay.write(delay);
         }
     }
 }

@@ -13,7 +13,7 @@
 //
 // =============================================================================
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 // =============================================================================
 // Constants
@@ -168,6 +168,13 @@ pub trait IValidatorRegistry<TContractState> {
     fn get_current_epoch(self: @TContractState) -> u64;
     fn is_active_validator(self: @TContractState, validator: ContractAddress) -> bool;
     fn get_active_validators(self: @TContractState) -> Array<ContractAddress>;
+
+    // === Upgrade Functions ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 // =============================================================================
@@ -181,8 +188,10 @@ mod ValidatorRegistry {
         MIN_VALIDATOR_STAKE,
     };
     use starknet::{
-        ContractAddress, get_caller_address,
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
     };
+    use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess,
@@ -224,6 +233,11 @@ mod ValidatorRegistry {
         min_stake: u256,
         /// Maximum commission (basis points)
         max_commission_bps: u16,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     // =========================================================================
@@ -244,6 +258,10 @@ mod ValidatorRegistry {
         ComputeWorkRecorded: ComputeWorkRecorded,
         ValidatorSetUpdated: ValidatorSetUpdated,
         EpochAdvanced: EpochAdvanced,
+        // Upgrade events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -323,6 +341,31 @@ mod ValidatorRegistry {
         new_epoch: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -349,6 +392,9 @@ mod ValidatorRegistry {
             total_compute_weight: 0,
             current_epoch: 1,
         });
+
+        // Initialize upgrade delay (2 days)
+        self.upgrade_delay.write(172800);
     }
 
     // =========================================================================
@@ -717,17 +763,97 @@ mod ValidatorRegistry {
             let mut result: Array<ContractAddress> = ArrayTrait::new();
             let count = self.active_count.read();
             let mut i: u64 = 0;
-            
+
             loop {
                 if i >= count {
                     break;
                 }
-                
+
                 result.append(self.active_validators.read(i));
                 i = i + 1;
             };
-            
+
             result
+        }
+
+        // =====================================================================
+        // UPGRADE FUNCTIONS
+        // =====================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+
+            assert!(now >= scheduled_at + delay, "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            self.upgrade_delay.write(delay);
         }
     }
 

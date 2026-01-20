@@ -12,7 +12,7 @@
 //
 // =============================================================================
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 // =============================================================================
 // Constants
@@ -140,6 +140,13 @@ pub trait IRewardVesting<TContractState> {
     fn get_claimable(self: @TContractState, participant: ContractAddress) -> u256;
     fn get_stats(self: @TContractState) -> VestingStats;
     fn get_current_epoch(self: @TContractState) -> u64;
+
+    // === Upgrade Functions ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 // =============================================================================
@@ -153,7 +160,8 @@ mod RewardVesting {
         DEFAULT_WORK_VESTING_EPOCHS, DEFAULT_SUBSIDY_VESTING_EPOCHS, DEFAULT_TOP_MINER_VESTING_EPOCHS,
     };
     use starknet::{
-        ContractAddress, get_caller_address,
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
     };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
@@ -161,6 +169,7 @@ mod RewardVesting {
         Map,
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+    use core::num::traits::Zero;
 
     // =========================================================================
     // Storage
@@ -188,6 +197,10 @@ mod RewardVesting {
         summaries: Map<ContractAddress, VestingSummary>,
         /// Global statistics
         stats: VestingStats,
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     // =========================================================================
@@ -201,6 +214,9 @@ mod RewardVesting {
         RewardClaimed: RewardClaimed,
         EpochAdvanced: EpochAdvanced,
         ConfigUpdated: ConfigUpdated,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -232,6 +248,31 @@ mod RewardVesting {
         subsidy_vesting_epochs: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -261,12 +302,15 @@ mod RewardVesting {
             participant_count: 0,
             current_epoch: 1,
         });
+
+        // Initialize upgrade delay (2 days in seconds)
+        self.upgrade_delay.write(172800);
     }
 
     // =========================================================================
     // Implementation
     // =========================================================================
-    
+
     #[abi(embed_v0)]
     impl RewardVestingImpl of IRewardVesting<ContractState> {
         fn claim(ref self: ContractState) -> u256 {
@@ -456,6 +500,84 @@ mod RewardVesting {
 
         fn get_current_epoch(self: @ContractState) -> u64 {
             self.current_epoch.read()
+        }
+
+        // === Upgrade Functions ===
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+            self.upgrade_delay.write(delay);
         }
     }
 

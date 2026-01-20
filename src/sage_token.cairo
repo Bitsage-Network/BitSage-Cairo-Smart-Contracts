@@ -33,7 +33,6 @@ pub mod SAGEToken {
     };
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::upgrades::UpgradeableComponent;
-    use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::ClassHash;
 
     // Component declarations
@@ -51,9 +50,8 @@ pub mod SAGEToken {
         ALLOC_PRE_SEED, ALLOC_CODE_DEV_INFRA, ALLOC_PUBLIC_SALE, ALLOC_STRATEGIC_PARTNERS,
         ALLOC_SEED, ALLOC_ADVISORS, TGE_TOTAL, TGE_PUBLIC_SALE,
         // Vesting periods
-        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS, VEST_PRE_SEED_MONTHS,
-        VEST_CODE_DEV_MONTHS, VEST_PUBLIC_SALE_MONTHS, VEST_STRATEGIC_MONTHS,
-        VEST_SEED_MONTHS, VEST_ADVISORS_CLIFF, VEST_ADVISORS_MONTHS,
+        VEST_TREASURY_MONTHS, VEST_TEAM_CLIFF, VEST_TEAM_MONTHS,
+        VEST_PUBLIC_SALE_MONTHS,
         // Emission rates
         EMISSION_RATE_YEAR_1, EMISSION_RATE_YEAR_2, EMISSION_RATE_YEAR_3,
         EMISSION_RATE_YEAR_4, EMISSION_RATE_YEAR_5
@@ -2018,8 +2016,8 @@ pub mod SAGEToken {
         fn set_upgrade_delay(ref self: ContractState, new_delay: u64) {
             self._only_emergency_council();
 
-            // Minimum 24 hours, maximum 7 days
-            assert(new_delay >= 86400, 'Delay must be >= 24h');
+            // Minimum 5 minutes, maximum 7 days
+            assert(new_delay >= 300, 'Delay must be >= 5min');
             assert(new_delay <= 604800, 'Delay must be <= 7 days');
 
             self.upgrade_delay.write(new_delay);
@@ -2627,13 +2625,16 @@ pub mod SAGEToken {
         /// Get emission rate for a given year (1-5)
         /// Returns rate in basis points
         fn _get_emission_rate_for_year(self: @ContractState, year: u32) -> u32 {
-            match year {
-                1 => EMISSION_RATE_YEAR_1,  // 3.0% = 300 bps
-                2 => EMISSION_RATE_YEAR_2,  // 2.5% = 250 bps
-                3 => EMISSION_RATE_YEAR_3,  // 2.0% = 200 bps
-                4 => EMISSION_RATE_YEAR_4,  // 1.5% = 150 bps
-                5 => EMISSION_RATE_YEAR_5,  // 1.0% = 100 bps
-                _ => EMISSION_RATE_YEAR_5,  // Default to lowest rate after year 5
+            if year == 1 {
+                EMISSION_RATE_YEAR_1  // 3.0% = 300 bps
+            } else if year == 2 {
+                EMISSION_RATE_YEAR_2  // 2.5% = 250 bps
+            } else if year == 3 {
+                EMISSION_RATE_YEAR_3  // 2.0% = 200 bps
+            } else if year == 4 {
+                EMISSION_RATE_YEAR_4  // 1.5% = 150 bps
+            } else {
+                EMISSION_RATE_YEAR_5  // 1.0% = 100 bps (default after year 5)
             }
         }
 

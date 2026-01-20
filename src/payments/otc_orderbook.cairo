@@ -215,14 +215,58 @@ pub trait IOTCOrderbook<TContractState> {
     /// Get 24h stats: (volume, high, low, last_price)
     fn get_24h_stats(self: @TContractState, pair_id: u8) -> (u256, u256, u256, u256);
 
-    /// Get last trade: (price, timestamp)
-    fn get_last_trade(self: @TContractState, pair_id: u8) -> (u256, u64);
+    /// Get last trade: (price, amount, timestamp)
+    fn get_last_trade(self: @TContractState, pair_id: u8) -> (u256, u256, u64);
 
     /// Get price snapshot at index: (price, timestamp)
     fn get_price_snapshot(self: @TContractState, pair_id: u8, index: u32) -> (u256, u64);
 
     /// Get count of price snapshots
     fn get_snapshot_count(self: @TContractState, pair_id: u8) -> u32;
+
+    // =========================================================================
+    // Trustless Orderbook View Functions
+    // =========================================================================
+
+    /// Get total order count (for iteration)
+    fn get_order_count(self: @TContractState) -> u256;
+
+    /// Get total trade count
+    fn get_trade_count(self: @TContractState) -> u256;
+
+    /// Get orderbook depth - aggregated price levels with total amounts
+    /// Returns (bids, asks) where each is Array<(price, total_amount, order_count)>
+    fn get_orderbook_depth(
+        self: @TContractState,
+        pair_id: u8,
+        max_levels: u32
+    ) -> (Array<(u256, u256, u32)>, Array<(u256, u256, u32)>);
+
+    /// Get active orders for a pair (paginated)
+    /// Returns array of Order structs
+    fn get_active_orders(
+        self: @TContractState,
+        pair_id: u8,
+        offset: u32,
+        limit: u32
+    ) -> Array<Order>;
+
+    /// Get trade history for a pair (paginated, newest first)
+    fn get_trade_history(
+        self: @TContractState,
+        pair_id: u8,
+        offset: u32,
+        limit: u32
+    ) -> Array<Trade>;
+
+    /// Get orders at a specific price level
+    fn get_orders_at_price(
+        self: @TContractState,
+        pair_id: u8,
+        side: OrderSide,
+        price: u256,
+        limit: u32
+    ) -> Array<Order>;
 
     // =========================================================================
     // Admin Functions
@@ -265,6 +309,9 @@ pub trait IOTCOrderbook<TContractState> {
 
     /// Get upgrade info: (pending_hash, scheduled_at, execute_after, delay)
     fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64, u64);
+
+    /// Set upgrade timelock delay (owner only)
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
@@ -329,8 +376,9 @@ mod OTCOrderbook {
         collected_fees: Map<ContractAddress, u256>,  // token -> amount
 
         // === TWAP & PRICE ANALYTICS ===
-        // Last trade price per pair
+        // Last trade data per pair
         last_trade_price: Map<u8, u256>,
+        last_trade_amount: Map<u8, u256>,
         last_trade_time: Map<u8, u64>,
 
         // TWAP tracking (Time-Weighted Average Price)
@@ -925,11 +973,12 @@ mod OTCOrderbook {
             (volume, high, low, last_price)
         }
 
-        /// Get last trade info: (price, timestamp)
-        fn get_last_trade(self: @ContractState, pair_id: u8) -> (u256, u64) {
+        /// Get last trade info: (price, amount, timestamp)
+        fn get_last_trade(self: @ContractState, pair_id: u8) -> (u256, u256, u64) {
             let price = self.last_trade_price.read(pair_id);
+            let amount = self.last_trade_amount.read(pair_id);
             let time = self.last_trade_time.read(pair_id);
-            (price, time)
+            (price, amount, time)
         }
 
         /// Get price snapshot at index: (price, timestamp)
@@ -940,6 +989,186 @@ mod OTCOrderbook {
         /// Get count of price snapshots
         fn get_snapshot_count(self: @ContractState, pair_id: u8) -> u32 {
             self.price_snapshot_count.read(pair_id)
+        }
+
+        // =========================================================================
+        // Trustless Orderbook View Functions
+        // =========================================================================
+
+        /// Get total order count
+        fn get_order_count(self: @ContractState) -> u256 {
+            self.order_count.read()
+        }
+
+        /// Get total trade count
+        fn get_trade_count(self: @ContractState) -> u256 {
+            self.trade_count.read()
+        }
+
+        /// Get orderbook depth - aggregated price levels with total amounts
+        /// Returns (bids, asks) where each is Array<(price, total_amount, order_count)>
+        fn get_orderbook_depth(
+            self: @ContractState,
+            pair_id: u8,
+            max_levels: u32
+        ) -> (Array<(u256, u256, u32)>, Array<(u256, u256, u32)>) {
+            let total_orders = self.order_count.read();
+
+            // Collect all active bids and asks with their prices
+            let mut bid_prices: Array<u256> = array![];
+            let mut bid_amounts: Array<u256> = array![];
+            let mut ask_prices: Array<u256> = array![];
+            let mut ask_amounts: Array<u256> = array![];
+
+            let mut i: u256 = 1;
+            loop {
+                if i > total_orders {
+                    break;
+                }
+
+                let order = self.orders.read(i);
+
+                // Only include active orders for this pair
+                if order.pair_id == pair_id
+                    && order.remaining > 0
+                    && (order.status == OrderStatus::Open || order.status == OrderStatus::PartialFill) {
+
+                    match order.side {
+                        OrderSide::Buy => {
+                            bid_prices.append(order.price);
+                            bid_amounts.append(order.remaining);
+                        },
+                        OrderSide::Sell => {
+                            ask_prices.append(order.price);
+                            ask_amounts.append(order.remaining);
+                        },
+                    }
+                }
+
+                i += 1;
+            };
+
+            // Aggregate by price level (simplified - in production would use sorted maps)
+            let bids = self._aggregate_price_levels(@bid_prices, @bid_amounts, max_levels, true);
+            let asks = self._aggregate_price_levels(@ask_prices, @ask_amounts, max_levels, false);
+
+            (bids, asks)
+        }
+
+        /// Get active orders for a pair (paginated)
+        fn get_active_orders(
+            self: @ContractState,
+            pair_id: u8,
+            offset: u32,
+            limit: u32
+        ) -> Array<Order> {
+            let total_orders = self.order_count.read();
+            let mut result: Array<Order> = array![];
+            let mut count: u32 = 0;
+            let mut found: u32 = 0;
+            let max_limit: u32 = if limit > 100 { 100 } else { limit }; // Cap at 100
+
+            let mut i: u256 = 1;
+            loop {
+                if i > total_orders || found >= max_limit {
+                    break;
+                }
+
+                let order = self.orders.read(i);
+
+                // Check if active order for this pair
+                if order.pair_id == pair_id
+                    && order.remaining > 0
+                    && (order.status == OrderStatus::Open || order.status == OrderStatus::PartialFill) {
+
+                    if count >= offset {
+                        result.append(order);
+                        found += 1;
+                    }
+                    count += 1;
+                }
+
+                i += 1;
+            };
+
+            result
+        }
+
+        /// Get trade history for a pair (paginated, newest first)
+        fn get_trade_history(
+            self: @ContractState,
+            pair_id: u8,
+            offset: u32,
+            limit: u32
+        ) -> Array<Trade> {
+            let total_trades = self.trade_count.read();
+            let mut result: Array<Trade> = array![];
+            let mut count: u32 = 0;
+            let mut found: u32 = 0;
+            let max_limit: u32 = if limit > 100 { 100 } else { limit }; // Cap at 100
+
+            // Iterate from newest to oldest
+            let mut i: u256 = total_trades;
+            loop {
+                if i == 0 || found >= max_limit {
+                    break;
+                }
+
+                let trade = self.trades.read(i);
+
+                // Get the maker order to check pair_id
+                let maker_order = self.orders.read(trade.maker_order_id);
+
+                if maker_order.pair_id == pair_id {
+                    if count >= offset {
+                        result.append(trade);
+                        found += 1;
+                    }
+                    count += 1;
+                }
+
+                i -= 1;
+            };
+
+            result
+        }
+
+        /// Get orders at a specific price level
+        fn get_orders_at_price(
+            self: @ContractState,
+            pair_id: u8,
+            side: OrderSide,
+            price: u256,
+            limit: u32
+        ) -> Array<Order> {
+            let total_orders = self.order_count.read();
+            let mut result: Array<Order> = array![];
+            let mut found: u32 = 0;
+            let max_limit: u32 = if limit > 50 { 50 } else { limit }; // Cap at 50
+
+            let mut i: u256 = 1;
+            loop {
+                if i > total_orders || found >= max_limit {
+                    break;
+                }
+
+                let order = self.orders.read(i);
+
+                // Check if matches criteria
+                if order.pair_id == pair_id
+                    && order.side == side
+                    && order.price == price
+                    && order.remaining > 0
+                    && (order.status == OrderStatus::Open || order.status == OrderStatus::PartialFill) {
+
+                    result.append(order);
+                    found += 1;
+                }
+
+                i += 1;
+            };
+
+            result
         }
 
         // =========================================================================
@@ -1038,6 +1267,11 @@ mod OTCOrderbook {
 
             (pending, scheduled_at, execute_after, delay)
         }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            self.upgrade_delay.write(delay);
+        }
     }
 
     #[generate_trait]
@@ -1048,6 +1282,121 @@ mod OTCOrderbook {
 
         fn _require_not_paused(self: @ContractState) {
             assert!(!self.config.read().paused, "Orderbook paused");
+        }
+
+        /// Aggregate price levels from arrays of prices and amounts
+        /// Returns Array<(price, total_amount, order_count)> sorted by best price first
+        fn _aggregate_price_levels(
+            self: @ContractState,
+            prices: @Array<u256>,
+            amounts: @Array<u256>,
+            max_levels: u32,
+            is_bid: bool
+        ) -> Array<(u256, u256, u32)> {
+            let len = prices.len();
+            if len == 0 {
+                return array![];
+            }
+
+            // Simple aggregation: find unique prices and sum amounts
+            // This is O(n^2) but acceptable for view functions with limited data
+            let mut result: Array<(u256, u256, u32)> = array![];
+            let mut processed: Array<u256> = array![]; // Track processed prices
+
+            let mut i: u32 = 0;
+            loop {
+                if i >= len || result.len() >= max_levels {
+                    break;
+                }
+
+                let price = *prices.at(i);
+
+                // Check if already processed
+                let mut already_processed = false;
+                let mut j: u32 = 0;
+                loop {
+                    if j >= processed.len() {
+                        break;
+                    }
+                    if *processed.at(j) == price {
+                        already_processed = true;
+                        break;
+                    }
+                    j += 1;
+                };
+
+                if !already_processed {
+                    // Aggregate all orders at this price
+                    let mut total_amount: u256 = 0;
+                    let mut order_count: u32 = 0;
+
+                    let mut k: u32 = 0;
+                    loop {
+                        if k >= len {
+                            break;
+                        }
+                        if *prices.at(k) == price {
+                            total_amount += *amounts.at(k);
+                            order_count += 1;
+                        }
+                        k += 1;
+                    };
+
+                    // Insert sorted (bids: highest first, asks: lowest first)
+                    let mut inserted = false;
+                    let mut new_result: Array<(u256, u256, u32)> = array![];
+
+                    let mut m: u32 = 0;
+                    loop {
+                        if m >= result.len() {
+                            break;
+                        }
+
+                        let (existing_price, existing_amount, existing_count) = *result.at(m);
+
+                        if !inserted {
+                            let should_insert = if is_bid {
+                                price > existing_price
+                            } else {
+                                price < existing_price
+                            };
+
+                            if should_insert {
+                                new_result.append((price, total_amount, order_count));
+                                inserted = true;
+                            }
+                        }
+
+                        new_result.append((existing_price, existing_amount, existing_count));
+                        m += 1;
+                    };
+
+                    if !inserted {
+                        new_result.append((price, total_amount, order_count));
+                    }
+
+                    result = new_result;
+                    processed.append(price);
+                }
+
+                i += 1;
+            };
+
+            // Trim to max_levels
+            if result.len() > max_levels {
+                let mut trimmed: Array<(u256, u256, u32)> = array![];
+                let mut t: u32 = 0;
+                loop {
+                    if t >= max_levels {
+                        break;
+                    }
+                    trimmed.append(*result.at(t));
+                    t += 1;
+                };
+                return trimmed;
+            }
+
+            result
         }
 
         /// Internal function for placing limit orders (used by both single and batch)
@@ -1245,11 +1594,80 @@ mod OTCOrderbook {
         }
 
         fn _recalculate_best_price(ref self: ContractState, pair_id: u8, side: OrderSide) {
-            // Simplified: reset to 0, will be updated on next order
-            // In production, would scan price levels
+            // Scan through recent orders to find next best price
+            // This is O(n) but acceptable for testnet; mainnet would use sorted structures
+            let total_orders = self.order_count.read();
+            let mut best_price: u256 = 0;
+            let mut i: u256 = 1;
+
+            loop {
+                if i > total_orders {
+                    break;
+                }
+
+                let order = self.orders.read(i);
+
+                // Check if order matches criteria: same pair, same side, and active
+                if order.pair_id == pair_id
+                    && order.side == side
+                    && order.remaining > 0
+                    && (order.status == OrderStatus::Open || order.status == OrderStatus::PartialFill) {
+
+                    match side {
+                        OrderSide::Buy => {
+                            // For bids, find highest price
+                            if order.price > best_price {
+                                best_price = order.price;
+                            }
+                        },
+                        OrderSide::Sell => {
+                            // For asks, find lowest price
+                            if best_price == 0 || order.price < best_price {
+                                best_price = order.price;
+                            }
+                        },
+                    }
+                }
+
+                i += 1;
+            };
+
             match side {
-                OrderSide::Buy => self.best_bid.write(pair_id, 0),
-                OrderSide::Sell => self.best_ask.write(pair_id, 0),
+                OrderSide::Buy => self.best_bid.write(pair_id, best_price),
+                OrderSide::Sell => self.best_ask.write(pair_id, best_price),
+            }
+        }
+
+        /// Find a valid maker order at given price level
+        /// Returns order_id if found, 0 if no valid order exists
+        fn _find_valid_maker_order(
+            ref self: ContractState,
+            pair_id: u8,
+            side: OrderSide,
+            price: u256,
+            exclude_maker: ContractAddress
+        ) -> u256 {
+            let total_orders = self.order_count.read();
+            let mut i: u256 = 1;
+
+            loop {
+                if i > total_orders {
+                    break 0;
+                }
+
+                let order = self.orders.read(i);
+
+                // Check if order matches: right pair, side, price, has remaining, is active, not self-trade
+                if order.pair_id == pair_id
+                    && order.side == side
+                    && order.price == price
+                    && order.remaining > 0
+                    && (order.status == OrderStatus::Open || order.status == OrderStatus::PartialFill)
+                    && order.maker != exclude_maker {
+                    break i; // Found valid order
+                }
+
+                i += 1;
             }
         }
 
@@ -1323,20 +1741,31 @@ mod OTCOrderbook {
             let pair = self.pairs.read(taker_order.pair_id);
             let config = self.config.read();
 
-            // Find maker order at this price level
-            let maker_side: felt252 = match taker_order.side {
-                OrderSide::Buy => 'sell',
-                OrderSide::Sell => 'buy',
+            // Find a valid maker order at this price level
+            let maker_order_side = match taker_order.side {
+                OrderSide::Buy => OrderSide::Sell,
+                OrderSide::Sell => OrderSide::Buy,
             };
 
-            let level_count = self.price_level_count.read((taker_order.pair_id, maker_side, match_price));
-            if level_count == 0 {
+            // Find valid maker order by scanning (price level tracking can be stale)
+            let maker_order_id = self._find_valid_maker_order(
+                taker_order.pair_id, maker_order_side, match_price, taker_order.maker
+            );
+
+            if maker_order_id == 0 {
+                // No valid order found at this price, recalculate best price
+                self._recalculate_best_price(taker_order.pair_id, maker_order_side);
                 return 0;
             }
 
-            // Get first order at this level (FIFO)
-            let maker_order_id = self.price_level_orders.read((taker_order.pair_id, maker_side, match_price, 0));
             let mut maker_order = self.orders.read(maker_order_id);
+
+            // Double-check maker order is valid (belt and suspenders)
+            if maker_order.remaining == 0
+                || (maker_order.status != OrderStatus::Open && maker_order.status != OrderStatus::PartialFill) {
+                self._recalculate_best_price(taker_order.pair_id, maker_order_side);
+                return 0;
+            }
 
             // Calculate fill amount
             let fill_amount = if taker_order.remaining < maker_order.remaining {
@@ -1503,8 +1932,9 @@ mod OTCOrderbook {
         fn _update_price_analytics(ref self: ContractState, pair_id: u8, price: u256, volume: u256) {
             let current_time = get_block_timestamp();
 
-            // Update last trade price
+            // Update last trade data (price, amount, timestamp)
             self.last_trade_price.write(pair_id, price);
+            self.last_trade_amount.write(pair_id, volume);
             self.last_trade_time.write(pair_id, current_time);
 
             // Update TWAP cumulative

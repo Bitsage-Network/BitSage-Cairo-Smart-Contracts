@@ -1,6 +1,9 @@
 // SAGE Network Smart Contracts
 // Main library file for Cairo 2.x smart contracts
 
+// Account Abstraction - Worker accounts with session keys and paymaster support
+pub mod accounts;
+
 pub mod cdc_pool;
 pub mod sage_token;
 pub mod job_manager;
@@ -26,6 +29,8 @@ pub mod utils {
     pub mod upgradability;
     // Cairo 2.12.0: Code deduplication utilities
     pub mod common;
+    // Mock ERC20 for devnet testing
+    pub mod mock_erc20;
 }
 
 pub mod vesting {
@@ -40,6 +45,7 @@ pub mod governance {
 }
 
 pub mod contracts {
+    pub mod achievement_nft;
     pub mod proof_verifier;
     pub mod staking;
     pub mod gamification;
@@ -78,5 +84,8 @@ pub mod tokenomics;
 // Accepts: USDC, STRK, wBTC, SAGE with tiered discounts
 // Features: OTC desk (no AMM dependency), staked SAGE credits, privacy payments
 pub mod payments;
+
+// Growth - Referral system, loyalty rewards, campaigns
+pub mod growth;
 
 // Tests are located in the tests/ directory and managed by snforge

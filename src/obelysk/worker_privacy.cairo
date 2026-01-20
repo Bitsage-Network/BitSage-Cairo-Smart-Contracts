@@ -15,10 +15,11 @@
 use starknet::ContractAddress;
 use sage_contracts::obelysk::elgamal::{
     ECPoint, ElGamalCiphertext, EncryptedBalance, EncryptionProof,
-    derive_public_key, decrypt_point, ec_mul, ec_add, ec_neg, ec_sub,
+    derive_public_key, ec_mul, ec_add, ec_sub,
     generator, generator_h, hash_points, pedersen_commit, is_zero,
     get_c1, get_c2, get_commitment, create_proof_with_commitment
 };
+use sage_contracts::obelysk::pedersen_commitments::PedersenCommitment;
 
 /// Worker keypair for privacy operations
 #[derive(Copy, Drop, Serde, Clone)]
@@ -208,11 +209,14 @@ pub trait IWorkerPrivacyHelper<TContractState> {
     );
 
     /// Withdraw from private balance to public SAGE
+    /// Note: Range proof is passed as serialized calldata (Span<felt252>)
     fn withdraw_to_public(
         ref self: TContractState,
         amount: u256,
         encrypted_delta: ElGamalCiphertext,
-        proof: EncryptionProof
+        proof: EncryptionProof,
+        remaining_balance_commitment: PedersenCommitment,
+        range_proof_data: Span<felt252>
     );
 
     /// Get worker's pending payments
@@ -220,15 +224,27 @@ pub trait IWorkerPrivacyHelper<TContractState> {
 
     /// Get worker's privacy status
     fn is_privacy_registered(self: @TContractState, worker: ContractAddress) -> bool;
+
+    // ===================== UPGRADE FUNCTIONS =====================
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, new_delay: u64);
 }
 
 #[starknet::contract]
 mod WorkerPrivacyHelper {
     use super::{IWorkerPrivacyHelper, ECPoint, ElGamalCiphertext, EncryptionProof, is_zero};
-    use starknet::{ContractAddress, get_caller_address, get_contract_address};
+    use sage_contracts::obelysk::pedersen_commitments::PedersenCommitment;
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
+    use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
-        StorageMapReadAccess, StorageMapWriteAccess, Map
+        StorageMapReadAccess, Map
     };
 
     // Import PaymentRouter and PrivacyRouter
@@ -249,6 +265,11 @@ mod WorkerPrivacyHelper {
         // Key format: poseidon(worker_address, index)
         worker_pending_jobs: Map<felt252, u256>,
         worker_pending_count: Map<ContractAddress, u32>,
+
+        // ================ UPGRADE STORAGE ================
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -257,6 +278,9 @@ mod WorkerPrivacyHelper {
         PrivacyKeyRegistered: PrivacyKeyRegistered,
         PaymentClaimed: PaymentClaimed,
         WithdrawalCompleted: WithdrawalCompleted,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -282,6 +306,27 @@ mod WorkerPrivacyHelper {
         amount: u256,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduler: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        old_class_hash: ClassHash,
+        new_class_hash: ClassHash,
+        executor: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        cancelled_class_hash: ClassHash,
+        canceller: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -292,6 +337,7 @@ mod WorkerPrivacyHelper {
         self.owner.write(owner);
         self.payment_router.write(payment_router);
         self.privacy_router.write(privacy_router);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -344,7 +390,9 @@ mod WorkerPrivacyHelper {
             ref self: ContractState,
             amount: u256,
             encrypted_delta: ElGamalCiphertext,
-            proof: EncryptionProof
+            proof: EncryptionProof,
+            remaining_balance_commitment: PedersenCommitment,
+            range_proof_data: Span<felt252>
         ) {
             let caller = get_caller_address();
 
@@ -352,7 +400,13 @@ mod WorkerPrivacyHelper {
             let privacy_router = IPrivacyRouterDispatcher {
                 contract_address: self.privacy_router.read()
             };
-            privacy_router.withdraw(amount, encrypted_delta, proof);
+            privacy_router.withdraw(
+                amount,
+                encrypted_delta,
+                proof,
+                remaining_balance_commitment,
+                range_proof_data
+            );
 
             self.emit(WithdrawalCompleted {
                 worker: caller,
@@ -388,6 +442,79 @@ mod WorkerPrivacyHelper {
             };
             let pk = payment_router.get_worker_public_key(worker);
             !is_zero(pk)
+        }
+
+        // =====================================================================
+        // UPGRADE FUNCTIONS
+        // =====================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after: current_time + delay,
+                scheduler: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            assert!(get_block_timestamp() >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+            self.emit(UpgradeExecuted {
+                old_class_hash: pending,
+                new_class_hash: pending,
+                executor: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                canceller: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64, u64) {
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            (pending, scheduled_at, if scheduled_at > 0 { scheduled_at + delay } else { 0 }, delay)
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, new_delay: u64) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(self.pending_upgrade.read().is_zero(), "Cannot change delay with pending upgrade");
+            assert!(new_delay >= 3600 && new_delay <= 2592000, "Invalid delay range");
+            self.upgrade_delay.write(new_delay);
         }
     }
 }

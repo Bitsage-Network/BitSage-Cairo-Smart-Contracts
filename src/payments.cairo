@@ -11,3 +11,12 @@ pub mod proof_gated_payment;
 //! Each hour of compute generates a proof checkpoint for billing
 //! Supports STWO proofs and TEE attestations
 pub mod metered_billing;
+
+//! OTC Orderbook - Decentralized limit order book for SAGE trading
+//! Features: Limit/market orders, partial fills, multi-pair support
+pub mod otc_orderbook;
+
+//! Paymaster - Gas Abstraction for Privacy Operations
+//! Sponsors gas fees for privacy transactions to prevent gas payment linkage
+//! Supports subscriptions, rate limiting, and enterprise accounts
+pub mod paymaster;

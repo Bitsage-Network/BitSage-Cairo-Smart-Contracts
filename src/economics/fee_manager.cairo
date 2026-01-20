@@ -14,7 +14,7 @@
 //
 // =============================================================================
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 // =============================================================================
 // Constants (Basis Points)
@@ -135,6 +135,13 @@ pub trait IFeeManager<TContractState> {
     fn get_staker_reward(self: @TContractState, staker: ContractAddress) -> StakerReward;
     fn get_current_epoch(self: @TContractState) -> u64;
     fn get_epoch_staker_pool(self: @TContractState, epoch: u64) -> u256;
+
+    // === Upgrade Functions ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 // =============================================================================
@@ -149,7 +156,8 @@ mod FeeManager {
         BPS_DENOMINATOR,
     };
     use starknet::{
-        ContractAddress, get_caller_address,
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
     };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
@@ -191,6 +199,10 @@ mod FeeManager {
         paused: bool,
         /// Burn address (zero address for Starknet)
         burn_address: ContractAddress,
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     // =========================================================================
@@ -206,6 +218,9 @@ mod FeeManager {
         StakerRewardsClaimed: StakerRewardsClaimed,
         ConfigUpdated: ConfigUpdated,
         EpochAdvanced: EpochAdvanced,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -247,6 +262,31 @@ mod FeeManager {
     struct EpochAdvanced {
         old_epoch: u64,
         new_epoch: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
     }
 
     // =========================================================================
@@ -298,6 +338,9 @@ mod FeeManager {
         // Burn address (dead address)
         let burn_addr: ContractAddress = 0xdead.try_into().unwrap();
         self.burn_address.write(burn_addr);
+
+        // Initialize upgrade delay (2 days in seconds)
+        self.upgrade_delay.write(172800);
     }
 
     // =========================================================================
@@ -504,6 +547,84 @@ mod FeeManager {
 
         fn get_epoch_staker_pool(self: @ContractState, epoch: u64) -> u256 {
             self.epoch_staker_pool.read(epoch)
+        }
+
+        // === Upgrade Functions ===
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+            self.upgrade_delay.write(delay);
         }
     }
 

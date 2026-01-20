@@ -61,6 +61,10 @@ mod JobManager {
         // PHASE 3: Proof-Gated Payment integration
         IProofGatedPaymentDispatcher, IProofGatedPaymentDispatcherTrait
     };
+    use starknet::{
+        ClassHash,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
 
     #[event]
     #[derive(Drop, starknet::Event)]
@@ -81,6 +85,21 @@ mod JobManager {
         CDCPoolNotificationFailed: CDCPoolNotificationFailed,
         // Phase 3: Proof-Gated Payment events
         JobPaymentRegistered: JobPaymentRegistered,
+        // Decentralized job claiming
+        JobClaimed: JobClaimed,
+        // Upgrade events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct JobClaimed {
+        #[key]
+        job_id: u256,
+        #[key]
+        worker: ContractAddress,
+        claimed_at: u64
     }
 
     #[derive(Drop, starknet::Event)]
@@ -196,6 +215,32 @@ mod JobManager {
         timestamp: u64
     }
 
+    // Upgrade event structs
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[storage]
     struct Storage {
         // Configuration parameters
@@ -293,6 +338,21 @@ mod JobManager {
 
         // Phase 2.1: Reentrancy guard for cross-contract calls
         _reentrancy_guard: bool,
+
+        // Circuit breaker for CDC Pool calls
+        // When enabled, CDC Pool calls are skipped to prevent transaction reverts
+        cdc_pool_circuit_breaker: bool,
+        cdc_pool_circuit_breaker_until: u64, // Timestamp until circuit breaker is active
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
+
+        // Decentralized job claiming - pending jobs queue
+        pending_jobs: Map<u64, u256>,      // index -> job_id
+        pending_job_count: u64,            // Total pending jobs
+        job_pending_index: Map<felt252, u64>, // job_key -> index in pending queue (0 = not pending)
     }
 
     #[constructor]
@@ -325,6 +385,9 @@ mod JobManager {
         self.next_model_id.write(1);
         self.contract_paused.write(false);
         self._reentrancy_guard.write(false);
+
+        // Initialize upgrade delay (2 days in seconds)
+        self.upgrade_delay.write(172800);
     }
 
     #[abi(embed_v0)]
@@ -398,19 +461,22 @@ mod JobManager {
             // Initialize job state as Queued
             self.job_states.write(job_key, JobState::Queued);
 
+            // Add to pending jobs queue for decentralized claiming
+            self._add_to_pending_queue(job_key, job_id.value);
+
             // Reserve gas for job execution
             self.reserve_gas_for_job(job_id, estimated_gas);
-            
+
             // Update counters
             self.total_jobs.write(self.total_jobs.read() + 1);
             self.active_jobs.write(self.active_jobs.read() + 1);
-            
+
             self.emit(JobSubmitted {
                 job_id: job_id.value,
                 client,
                 payment
             });
-            
+
             job_id
         }
 
@@ -488,6 +554,97 @@ mod JobManager {
                 job_id: job_id.value,
                 worker: worker_address
             });
+        }
+
+        /// Claim a job directly - decentralized, any registered worker can claim
+        /// This enables workers to operate without a coordinator
+        fn claim_job(
+            ref self: ContractState,
+            job_id: JobId
+        ) {
+            self._check_not_paused();
+
+            let caller = get_caller_address();
+
+            // Verify caller is a registered worker
+            let worker_id = self.address_to_worker_id.read(caller);
+            assert!(!worker_id.is_zero(), "Not a registered worker");
+            assert!(self.worker_active.read(worker_id), "Worker not active");
+
+            // Validate job ID and state
+            let Some(job_key) = job_id.value.try_into() else {
+                panic!("Invalid job ID conversion");
+            };
+
+            let current_state = self.job_states.read(job_key);
+            let JobState::Queued = current_state else {
+                panic!("Job not available for claiming");
+            };
+
+            // Update job state to Processing BEFORE external calls (CEI pattern)
+            self.job_states.write(job_key, JobState::Processing);
+            let current_time = get_block_timestamp();
+            let (created_at, _, completed_at) = self.job_timestamps.read(job_key);
+            self.job_timestamps.write(job_key, (created_at, current_time, completed_at));
+
+            // Assign job to claiming worker
+            self.job_workers.write(job_key, caller);
+
+            // Remove from pending jobs queue
+            self._remove_from_pending_queue(job_key);
+
+            // Update worker's job tracking
+            let worker_job_idx = self.worker_job_count.read(caller);
+            self.worker_jobs.write((caller, worker_job_idx), job_key);
+            self.worker_job_count.write(caller, worker_job_idx + 1);
+
+            // Phase 2.1: Reentrancy guard for CDC Pool notification
+            self._start_nonreentrant();
+
+            // Notify CDC Pool to reserve worker for this job
+            let job_deadline = self.job_deadlines.read(job_key);
+            let reservation_duration = if job_deadline > current_time {
+                job_deadline - current_time
+            } else {
+                self.max_job_duration.read()
+            };
+            self._notify_cdc_pool_reserve_worker_safe(
+                WorkerId { value: worker_id },
+                job_id,
+                reservation_duration
+            );
+
+            self._end_nonreentrant();
+
+            self.emit(JobClaimed {
+                job_id: job_id.value,
+                worker: caller,
+                claimed_at: current_time
+            });
+        }
+
+        /// Get list of pending job IDs for workers to find available work
+        fn get_pending_jobs(self: @ContractState, offset: u64, limit: u64) -> Array<JobId> {
+            let mut jobs: Array<JobId> = array![];
+            let total = self.pending_job_count.read();
+
+            let mut i = offset;
+            let end = if offset + limit > total { total } else { offset + limit };
+
+            while i < end {
+                let job_value = self.pending_jobs.read(i);
+                if job_value > 0 {
+                    jobs.append(JobId { value: job_value });
+                }
+                i += 1;
+            };
+
+            jobs
+        }
+
+        /// Get count of pending jobs
+        fn get_pending_job_count(self: @ContractState) -> u64 {
+            self.pending_job_count.read()
         }
 
         fn submit_job_result(
@@ -1042,7 +1199,37 @@ mod JobManager {
         fn set_proof_gated_payment(ref self: ContractState, payment: ContractAddress) {
             let caller = get_caller_address();
             assert!(caller == self.admin.read(), "Not authorized");
+            // Note: Zero address is allowed here to disable proof-gated payment (legacy mode)
             self.proof_gated_payment.write(payment);
+        }
+
+        // ============================================================================
+        // Contract Integration Setup Functions
+        // ============================================================================
+
+        /// Admin: Set ReputationManager contract address
+        fn set_reputation_manager(ref self: ContractState, reputation_manager: ContractAddress) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(!reputation_manager.is_zero(), "Invalid reputation manager address");
+            self.reputation_manager.write(reputation_manager);
+        }
+
+        /// Admin: Set CDC Pool contract address
+        fn set_cdc_pool_contract(ref self: ContractState, cdc_pool: ContractAddress) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(!cdc_pool.is_zero(), "Invalid CDC pool address");
+            self.cdc_pool_contract.write(cdc_pool);
+        }
+
+        /// Get integration contract addresses
+        fn get_integration_contracts(self: @ContractState) -> (ContractAddress, ContractAddress, ContractAddress) {
+            (
+                self.reputation_manager.read(),
+                self.cdc_pool_contract.read(),
+                self.proof_gated_payment.read()
+            )
         }
 
         /// Check if proof is verified and payment is ready for a job
@@ -1059,6 +1246,129 @@ mod JobManager {
             };
 
             proof_payment.is_payment_ready(job_id.value)
+        }
+
+        // ============================================================================
+        // Circuit Breaker Functions
+        // ============================================================================
+
+        /// Enable circuit breaker to skip CDC Pool calls (for emergency use)
+        fn enable_cdc_pool_circuit_breaker(ref self: ContractState, duration: u64) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(duration > 0, "Duration must be positive");
+            assert!(duration <= 604800, "Duration cannot exceed 7 days"); // Max 7 days
+
+            let current_time = get_block_timestamp();
+            let expires_at = current_time + duration;
+
+            self.cdc_pool_circuit_breaker.write(true);
+            self.cdc_pool_circuit_breaker_until.write(expires_at);
+        }
+
+        /// Disable circuit breaker to resume CDC Pool calls
+        fn disable_cdc_pool_circuit_breaker(ref self: ContractState) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+
+            self.cdc_pool_circuit_breaker.write(false);
+            self.cdc_pool_circuit_breaker_until.write(0);
+        }
+
+        /// Check if circuit breaker is currently active
+        fn get_circuit_breaker_status(self: @ContractState) -> (bool, u64) {
+            let is_enabled = self.cdc_pool_circuit_breaker.read();
+            let expires_at = self.cdc_pool_circuit_breaker_until.read();
+            let current_time = get_block_timestamp();
+
+            // Circuit breaker is active if enabled AND not expired
+            let is_active = is_enabled && current_time < expires_at;
+
+            (is_active, expires_at)
+        }
+
+        // ============================================================================
+        // Upgrade Functions
+        // ============================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            let pending = self.pending_upgrade.read();
+            assert!(pending.is_zero(), "Another upgrade is already pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = current_time + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let current_time = get_block_timestamp();
+
+            assert!(current_time >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade to cancel");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            let caller = get_caller_address();
+            assert!(caller == self.admin.read(), "Not authorized");
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            assert!(delay <= 2592000, "Delay must be at most 30 days");
+            self.upgrade_delay.write(delay);
         }
     }
 
@@ -1138,6 +1448,47 @@ mod JobManager {
 
         fn _check_not_paused(self: @ContractState) {
             assert!(!self.contract_paused.read(), "Contract is paused");
+        }
+
+        // ============================================================================
+        // Decentralized Job Queue Helpers
+        // ============================================================================
+
+        /// Add a job to the pending queue when submitted
+        fn _add_to_pending_queue(ref self: ContractState, job_key: felt252, job_id: u256) {
+            let count = self.pending_job_count.read();
+            self.pending_jobs.write(count, job_id);
+            self.job_pending_index.write(job_key, count + 1); // +1 so 0 means not in queue
+            self.pending_job_count.write(count + 1);
+        }
+
+        /// Remove a job from the pending queue when claimed or cancelled
+        fn _remove_from_pending_queue(ref self: ContractState, job_key: felt252) {
+            let index_plus_one = self.job_pending_index.read(job_key);
+            if index_plus_one == 0 {
+                return; // Not in queue
+            }
+
+            let index = index_plus_one - 1;
+            let count = self.pending_job_count.read();
+
+            // Swap with last element if not already last
+            if index < count - 1 {
+                let last_job_id = self.pending_jobs.read(count - 1);
+                self.pending_jobs.write(index, last_job_id);
+
+                // Update the moved job's index (need to find its key)
+                // For simplicity, we just mark this slot as having a different job
+                let Some(last_job_key) = last_job_id.try_into() else {
+                    return;
+                };
+                self.job_pending_index.write(last_job_key, index + 1);
+            }
+
+            // Clear the removed job's index and decrement count
+            self.job_pending_index.write(job_key, 0);
+            self.pending_jobs.write(count - 1, 0);
+            self.pending_job_count.write(count - 1);
         }
 
         // ============================================================================
@@ -1326,8 +1677,11 @@ mod JobManager {
                 return;
             }
 
-            // Note: Cairo doesn't have try-catch yet, so we call directly
-            // In production, consider using a circuit breaker pattern
+            // Check circuit breaker - skip CDC Pool calls if active
+            if self._is_circuit_breaker_active() {
+                return;
+            }
+
             let cdc_pool = ICDCPoolDispatcher { contract_address: cdc_pool_addr };
             cdc_pool.record_job_completion(worker_id, job_id, success, execution_time);
         }
@@ -1344,6 +1698,11 @@ mod JobManager {
             let cdc_pool_addr = self.cdc_pool_contract.read();
 
             if cdc_pool_addr.is_zero() {
+                return;
+            }
+
+            // Check circuit breaker - skip CDC Pool calls if active
+            if self._is_circuit_breaker_active() {
                 return;
             }
 
@@ -1366,6 +1725,11 @@ mod JobManager {
                 return;
             }
 
+            // Check circuit breaker - skip CDC Pool calls if active
+            if self._is_circuit_breaker_active() {
+                return;
+            }
+
             let cdc_pool = ICDCPoolDispatcher { contract_address: cdc_pool_addr };
             cdc_pool.reserve_worker(worker_id, job_id, duration);
         }
@@ -1382,8 +1746,26 @@ mod JobManager {
                 return;
             }
 
+            // Check circuit breaker - skip CDC Pool calls if active
+            if self._is_circuit_breaker_active() {
+                return;
+            }
+
             let cdc_pool = ICDCPoolDispatcher { contract_address: cdc_pool_addr };
             cdc_pool.release_worker(worker_id, job_id);
+        }
+
+        /// Internal helper to check if circuit breaker is active
+        fn _is_circuit_breaker_active(self: @ContractState) -> bool {
+            let is_enabled = self.cdc_pool_circuit_breaker.read();
+            if !is_enabled {
+                return false;
+            }
+
+            let expires_at = self.cdc_pool_circuit_breaker_until.read();
+            let current_time = get_block_timestamp();
+
+            current_time < expires_at
         }
 
         // ============================================================================

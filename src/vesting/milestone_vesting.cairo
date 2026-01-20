@@ -1,7 +1,7 @@
 // SAGE Network Milestone Vesting
 // Token distribution based on achievement of specific milestones
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// Milestone structure
 #[derive(Drop, Serde, starknet::Store, Copy)]
@@ -88,7 +88,10 @@ pub mod MilestoneVesting {
         MilestoneVestingCreated, MilestoneAdded, MilestoneCompleted,
         MilestoneVerified, TokensReleased
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
@@ -121,9 +124,14 @@ pub mod MilestoneVesting {
         // Totals
         total_allocated: u256,
         total_released: u256,
-        
+
         // Access control
         paused: bool,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -139,6 +147,9 @@ pub mod MilestoneVesting {
         OwnershipTransferred: OwnershipTransferred,
         ContractPaused: ContractPaused,
         ContractUnpaused: ContractUnpaused,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -169,6 +180,31 @@ pub mod MilestoneVesting {
         pub unpaused_by: ContractAddress,
     }
 
+    #[derive(Drop, starknet::Event)]
+    pub struct UpgradeScheduled {
+        #[key]
+        pub new_class_hash: ClassHash,
+        pub scheduled_at: u64,
+        pub execute_after: u64,
+        pub scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct UpgradeExecuted {
+        #[key]
+        pub new_class_hash: ClassHash,
+        pub executed_at: u64,
+        pub executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct UpgradeCancelled {
+        #[key]
+        pub cancelled_class_hash: ClassHash,
+        pub cancelled_at: u64,
+        pub cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -183,9 +219,10 @@ pub mod MilestoneVesting {
         self.total_allocated.write(0);
         self.total_released.write(0);
         self.paused.write(false);
-        
+
         // Owner is automatically a verifier
         self.verifiers.write(owner, true);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -521,6 +558,83 @@ pub mod MilestoneVesting {
         fn get_total_released(self: @ContractState) -> u256 {
             self.total_released.read()
         }
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._assert_only_owner();
+            assert(new_class_hash.is_non_zero(), 'Invalid class hash');
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._assert_only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert(pending.is_non_zero(), 'No upgrade scheduled');
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+
+            assert(now >= scheduled_at + delay, 'Upgrade delay not passed');
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._assert_only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert(pending.is_non_zero(), 'No upgrade scheduled');
+
+            let now = get_block_timestamp();
+
+            // Clear pending upgrade
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: now,
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read(),
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._assert_only_owner();
+            self.upgrade_delay.write(delay);
+        }
     }
 
     #[generate_trait]
@@ -600,6 +714,13 @@ pub trait IMilestoneVesting<TContractState> {
     fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
     fn get_total_allocated(self: @TContractState) -> u256;
     fn get_total_released(self: @TContractState) -> u256;
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 /// Utility functions for milestone vesting

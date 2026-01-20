@@ -3,7 +3,10 @@
 
 #[starknet::contract]
 mod Gamification {
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use core::num::traits::Zero;
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess, 
@@ -11,6 +14,7 @@ mod Gamification {
     };
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use sage_contracts::contracts::staking::{IWorkerStakingDispatcher, IWorkerStakingDispatcherTrait};
+    use sage_contracts::contracts::achievement_nft::{IAchievementNFTDispatcher, IAchievementNFTDispatcherTrait, AchievementMetadata};
 
     // Worker levels
     #[derive(Drop, Serde, Copy, PartialEq)]
@@ -107,6 +111,11 @@ mod Gamification {
         daily_reputation_gain: u64,
         job_reputation_gain: u64,
         perfect_streak_bonus: u64,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -117,6 +126,9 @@ mod Gamification {
         AchievementUnlocked: AchievementUnlocked,
         ReputationChanged: ReputationChanged,
         LeaderboardUpdated: LeaderboardUpdated,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -163,6 +175,31 @@ mod Gamification {
         rank: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
@@ -197,6 +234,7 @@ mod Gamification {
         
         // Initialize month
         self.current_month.write(self._get_current_month());
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     #[abi(embed_v0)]
@@ -263,8 +301,13 @@ mod Gamification {
                 // Level up reward
                 let reward = self._get_level_reward(new_level);
                 if reward > 0 {
+                    // Get worker address from staking contract
+                    let staking = IWorkerStakingDispatcher { contract_address: self.staking_contract.read() };
+                    let worker_address = staking.get_worker_address(worker_id);
+
+                    // Transfer reward to worker
                     let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
-                    token.transfer(starknet::get_contract_address(), reward); // TODO: Get worker address
+                    token.transfer(worker_address, reward);
                 }
                 
                 self.emit(LevelUp {
@@ -447,6 +490,84 @@ mod Gamification {
             assert!(get_caller_address() == self.owner.read(), "Not owner");
             self.staking_contract.write(staking_contract);
         }
+
+        // =========================================================================
+        // Upgrade Functions
+        // =========================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+            assert!(new_class_hash.is_non_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let execute_after = current_time + self.upgrade_delay.read();
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+
+            let new_class_hash = self.pending_upgrade.read();
+            assert!(new_class_hash.is_non_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let current_time = get_block_timestamp();
+            assert!(current_time >= scheduled_at + self.upgrade_delay.read(), "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(new_class_hash).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash,
+                executed_at: current_time,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+
+            let pending_hash = self.pending_upgrade.read();
+            assert!(pending_hash.is_non_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending_hash,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read(),
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert!(get_caller_address() == self.owner.read(), "Not owner");
+            assert!(delay >= 86400, "Delay must be at least 1 day");
+            self.upgrade_delay.write(delay);
+        }
     }
 
     #[generate_trait]
@@ -515,19 +636,31 @@ mod Gamification {
             let new_total = self.total_achievements_earned.read() + 1;
             self.total_achievements_earned.write(new_total);
             
+            // Get worker address from staking contract
+            let staking = IWorkerStakingDispatcher { contract_address: self.staking_contract.read() };
+            let worker_address = staking.get_worker_address(worker_id);
+
             // Transfer reward
             if reward > 0 {
-                let staking = IWorkerStakingDispatcher { contract_address: self.staking_contract.read() };
-                let worker_address = staking.get_worker_address(worker_id);
-                
                 if !worker_address.is_zero() {
                     let token = IERC20Dispatcher { contract_address: self.sage_token.read() };
                     token.transfer(worker_address, reward);
                 }
             }
-            
-            // TODO: Mint NFT
-            
+
+            // Mint achievement NFT
+            let nft_contract_addr = self.nft_contract.read();
+            if !nft_contract_addr.is_zero() && !worker_address.is_zero() {
+                let nft = IAchievementNFTDispatcher { contract_address: nft_contract_addr };
+                let metadata = AchievementMetadata {
+                    achievement_type,
+                    worker_id,
+                    earned_at: get_block_timestamp(),
+                    reward_amount: reward,
+                };
+                nft.mint_achievement(worker_address, nft_token_id, metadata);
+            }
+
             self.emit(AchievementUnlocked {
                 worker_id,
                 achievement_type,
@@ -558,5 +691,12 @@ pub trait IGamification<TContractState> {
     fn set_job_manager(ref self: TContractState, job_manager: starknet::ContractAddress);
     fn set_nft_contract(ref self: TContractState, nft_contract: starknet::ContractAddress);
     fn set_staking_contract(ref self: TContractState, staking_contract: starknet::ContractAddress);
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 

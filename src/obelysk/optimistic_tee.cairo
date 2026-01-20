@@ -1,6 +1,9 @@
 #[starknet::contract]
 mod OptimisticTEE {
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp, get_contract_address};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_contract_address,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use core::array::Array;
     use core::num::traits::Zero;
     use sage_contracts::interfaces::proof_verifier::{
@@ -51,13 +54,21 @@ mod OptimisticTEE {
 
     #[storage]
     struct Storage {
+        owner: ContractAddress,
         proof_verifier: ContractAddress,
+        sage_token: ContractAddress,
+
+        // Configuration state - production-grade initialization pattern
+        // These are set via configure() and locked via finalize()
         proof_gated_payment: ContractAddress,
+        prover_staking: ContractAddress,
+        configured: bool,   // True once configure() is called
+        finalized: bool,    // True once finalize() is called - locks forever
+
         challenge_period: u64,
         challenge_stake: u256,           // Required stake to challenge
         tee_results: Map<u256, TEEResult>,
         challenges: Map<u256, Challenge>,
-        owner: ContractAddress,
         // Worker address mapping
         worker_addresses: Map<felt252, ContractAddress>,
 
@@ -69,7 +80,6 @@ mod OptimisticTEE {
         job_in_queue: Map<u256, bool>,         // job_id -> is_in_queue
 
         // Keeper reward configuration
-        sage_token: ContractAddress,           // SAGE token for rewards
         keeper_reward_bps: u16,                // Basis points (50 = 0.5%)
         keeper_reward_pool: u256,              // Pool of SAGE for keeper rewards
         job_payment_amounts: Map<u256, u256>,  // job_id -> payment amount (for reward calc)
@@ -79,7 +89,6 @@ mod OptimisticTEE {
         total_jobs_finalized_by_keepers: u64,
 
         // === STAKING & SLASHING ===
-        prover_staking: ContractAddress,           // ProverStaking contract
         require_staking: bool,                      // Enforce staking requirement
         challenger_stakes: Map<u256, u256>,         // job_id -> actual stake locked
         challenger_stake_locked: Map<u256, bool>,   // job_id -> stake collected
@@ -88,6 +97,11 @@ mod OptimisticTEE {
         total_workers_slashed: u64,
         total_slash_amount: u256,
         total_challenger_rewards: u256,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -105,6 +119,10 @@ mod OptimisticTEE {
         ChallengerRewarded: ChallengerRewarded,
         ChallengerSlashed: ChallengerSlashed,
         ChallengeStakeCollected: ChallengeStakeCollected,
+        // Upgrade events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -193,20 +211,48 @@ mod OptimisticTEE {
         timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
+        owner: ContractAddress,
         proof_verifier: ContractAddress,
-        proof_gated_payment: ContractAddress,
-        sage_token: ContractAddress,
-        prover_staking: ContractAddress,
-        owner: ContractAddress
+        sage_token: ContractAddress
     ) {
-        self.proof_verifier.write(proof_verifier);
-        self.proof_gated_payment.write(proof_gated_payment);
-        self.sage_token.write(sage_token);
-        self.prover_staking.write(prover_staking);
+        // Production-grade: Only immutable dependencies in constructor
+        // Circular dependencies (proof_gated_payment, prover_staking) set via configure()
+        assert!(!owner.is_zero(), "Invalid owner");
+        assert!(!proof_verifier.is_zero(), "Invalid proof verifier");
+        assert!(!sage_token.is_zero(), "Invalid SAGE token");
+
         self.owner.write(owner);
+        self.proof_verifier.write(proof_verifier);
+        self.sage_token.write(sage_token);
+
         self.challenge_period.write(14400); // 4 hours
         self.challenge_stake.write(MIN_CHALLENGE_STAKE); // 100 SAGE to challenge
 
@@ -220,6 +266,13 @@ mod OptimisticTEE {
         self.total_workers_slashed.write(0);
         self.total_slash_amount.write(0);
         self.total_challenger_rewards.write(0);
+
+        // Initialize upgrade delay (2 days)
+        self.upgrade_delay.write(172800);
+
+        // Configuration state
+        self.configured.write(false);
+        self.finalized.write(false);
     }
 
     #[abi(embed_v0)]
@@ -549,10 +602,45 @@ mod OptimisticTEE {
             });
         }
 
+        // === Production-grade Configuration Functions ===
+
+        fn configure(
+            ref self: ContractState,
+            proof_gated_payment: ContractAddress,
+            prover_staking: ContractAddress
+        ) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(!self.finalized.read(), "Configuration locked");
+
+            assert!(!proof_gated_payment.is_zero(), "Invalid proof gated payment");
+            assert!(!prover_staking.is_zero(), "Invalid prover staking");
+
+            self.proof_gated_payment.write(proof_gated_payment);
+            self.prover_staking.write(prover_staking);
+            self.configured.write(true);
+        }
+
+        fn finalize_configuration(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(self.configured.read(), "Not configured");
+            assert!(!self.finalized.read(), "Already finalized");
+
+            self.finalized.write(true);
+        }
+
+        fn is_contract_configured(self: @ContractState) -> bool {
+            self.configured.read()
+        }
+
+        fn is_configuration_locked(self: @ContractState) -> bool {
+            self.finalized.read()
+        }
+
         // === Admin Functions ===
 
         fn set_proof_gated_payment(ref self: ContractState, payment: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(!self.finalized.read(), "Configuration locked");
             self.proof_gated_payment.write(payment);
         }
 
@@ -682,9 +770,10 @@ mod OptimisticTEE {
         // STAKING/SLASHING ADMIN FUNCTIONS
         // =====================================================================
 
-        /// Set ProverStaking contract address (admin only)
+        /// Set ProverStaking contract address (admin only, deprecated - use configure())
         fn set_prover_staking(ref self: ContractState, staking: ContractAddress) {
             assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(!self.finalized.read(), "Configuration locked");
             self.prover_staking.write(staking);
         }
 
@@ -751,6 +840,86 @@ mod OptimisticTEE {
 
             let new_pool = self.keeper_reward_pool.read() - amount;
             self.keeper_reward_pool.write(new_pool);
+        }
+
+        // =====================================================================
+        // UPGRADE FUNCTIONS
+        // =====================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            let execute_after = now + delay;
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+
+            assert!(now >= scheduled_at + delay, "Upgrade delay not passed");
+
+            // Clear pending upgrade
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            // Execute upgrade
+            replace_class_syscall(pending).unwrap_syscall();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            (
+                self.pending_upgrade.read(),
+                self.upgrade_scheduled_at.read(),
+                self.upgrade_delay.read()
+            )
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            self.upgrade_delay.write(delay);
         }
     }
 
@@ -905,7 +1074,7 @@ mod OptimisticTEE {
     }
 }
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 #[starknet::interface]
 pub trait IOptimisticTEE<TContractState> {
@@ -935,6 +1104,16 @@ pub trait IOptimisticTEE<TContractState> {
     fn batch_finalize(ref self: TContractState, job_ids: Array<u256>) -> u256;
     fn finalize_ready_jobs(ref self: TContractState, max_count: u32) -> u256;
     fn fund_keeper_pool(ref self: TContractState, amount: u256);
+
+    // === Configuration Functions (Production-grade initialization) ===
+    fn configure(
+        ref self: TContractState,
+        proof_gated_payment: ContractAddress,
+        prover_staking: ContractAddress
+    );
+    fn finalize_configuration(ref self: TContractState);
+    fn is_contract_configured(self: @TContractState) -> bool;
+    fn is_configuration_locked(self: @TContractState) -> bool;
 
     // Admin functions
     fn set_proof_gated_payment(ref self: TContractState, payment: ContractAddress);
@@ -969,5 +1148,12 @@ pub trait IOptimisticTEE<TContractState> {
     fn get_prover_staking(self: @TContractState) -> ContractAddress;
     fn is_worker_eligible(self: @TContractState, worker: ContractAddress) -> bool;
     fn get_challenger_stake(self: @TContractState, job_id: u256) -> (u256, bool);
+
+    // Upgrade functions
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 

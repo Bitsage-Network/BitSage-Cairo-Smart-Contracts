@@ -181,6 +181,13 @@ pub trait IStealthRegistry<TContractState> {
 
     /// Set the SAGE token address
     fn set_sage_token(ref self: TContractState, token: ContractAddress);
+
+    // ===================== UPGRADE FUNCTIONS =====================
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: starknet::ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, new_delay: u64);
 }
 
 #[starknet::contract]
@@ -191,7 +198,8 @@ mod StealthRegistry {
         encrypt_amount_to_stealth, ECPoint, ElGamalCiphertext
     };
     use starknet::{
-        ContractAddress, get_caller_address, get_block_timestamp, get_contract_address
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_contract_address,
+        syscalls::replace_class_syscall, SyscallResultTrait,
     };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
@@ -256,6 +264,11 @@ mod StealthRegistry {
         // First and last timestamps for range info
         first_announcement_time: u64,
         last_announcement_time: u64,
+
+        // ================ UPGRADE STORAGE ================
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     // =========================================================================
@@ -271,6 +284,9 @@ mod StealthRegistry {
         StealthPaymentClaimed: StealthPaymentClaimed,
         RegistryPaused: RegistryPaused,
         RegistryUnpaused: RegistryUnpaused,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -326,6 +342,27 @@ mod StealthRegistry {
         timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduler: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        old_class_hash: ClassHash,
+        new_class_hash: ClassHash,
+        executor: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        cancelled_class_hash: ClassHash,
+        canceller: ContractAddress,
+    }
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -346,6 +383,7 @@ mod StealthRegistry {
         self.registered_worker_count.write(0);
         self.total_volume.write(0);
         self.total_claimed.write(0);
+        self.upgrade_delay.write(172800); // 2 days
     }
 
     // =========================================================================
@@ -814,6 +852,78 @@ mod StealthRegistry {
             self._only_owner();
             assert!(!token.is_zero(), "Invalid token address");
             self.sage_token.write(token);
+        }
+
+        // =====================================================================
+        // UPGRADE FUNCTIONS
+        // =====================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            assert!(self.pending_upgrade.read().is_zero(), "Another upgrade pending");
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let current_time = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(current_time);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: current_time,
+                execute_after: current_time + delay,
+                scheduler: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            assert!(get_block_timestamp() >= scheduled_at + delay, "Timelock not expired");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap_syscall();
+            self.emit(UpgradeExecuted {
+                old_class_hash: pending,
+                new_class_hash: pending,
+                executor: get_caller_address(),
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No pending upgrade");
+
+            let zero_class: ClassHash = 0.try_into().unwrap();
+            self.pending_upgrade.write(zero_class);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                canceller: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64, u64) {
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            (pending, scheduled_at, if scheduled_at > 0 { scheduled_at + delay } else { 0 }, delay)
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, new_delay: u64) {
+            self._only_owner();
+            assert!(self.pending_upgrade.read().is_zero(), "Cannot change with pending upgrade");
+            assert!(new_delay >= 3600 && new_delay <= 2592000, "Invalid delay range");
+            self.upgrade_delay.write(new_delay);
         }
     }
 

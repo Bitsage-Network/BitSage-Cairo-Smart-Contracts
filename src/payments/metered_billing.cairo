@@ -5,7 +5,7 @@
 // Each hour of compute generates a proof checkpoint for billing
 // Supports both STWO proofs and TEE attestations
 
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 
 /// GPU tier classification
 #[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
@@ -175,10 +175,35 @@ pub trait IMeteredBilling<TContractState> {
     /// Set hourly rate for GPU tier
     fn set_hourly_rate(ref self: TContractState, gpu_tier: GPUTier, rate: u256);
 
-    /// Set payment contracts
+    // === Configuration Functions (Production-grade initialization) ===
+
+    /// Configure circular dependencies. Call after ProofGatedPayment and OptimisticTEE are deployed.
+    fn configure(
+        ref self: TContractState,
+        proof_gated_payment: ContractAddress,
+        optimistic_tee: ContractAddress
+    );
+
+    /// Finalize configuration - locks dependency addresses permanently
+    fn finalize_configuration(ref self: TContractState);
+
+    /// Check if contract is configured
+    fn is_contract_configured(self: @TContractState) -> bool;
+
+    /// Check if configuration is locked
+    fn is_configuration_locked(self: @TContractState) -> bool;
+
+    /// Set payment contracts (deprecated, use configure())
     fn set_proof_gated_payment(ref self: TContractState, payment: ContractAddress);
     fn set_proof_verifier(ref self: TContractState, verifier: ContractAddress);
     fn set_optimistic_tee(ref self: TContractState, tee: ContractAddress);
+
+    // === Upgrade Functions ===
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_upgrade_info(self: @TContractState) -> (ClassHash, u64, u64);
+    fn set_upgrade_delay(ref self: TContractState, delay: u64);
 }
 
 #[starknet::contract]
@@ -187,7 +212,10 @@ mod MeteredBilling {
         IMeteredBilling, GPUTier, VerificationMethod, MeteredJob,
         HourlyCheckpoint, WorkerGPU
     };
-    use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
+    use starknet::{
+        ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
+        syscalls::replace_class_syscall, SyscallResultTrait,
+    };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess,
         StorageMapReadAccess, StorageMapWriteAccess, Map
@@ -221,8 +249,13 @@ mod MeteredBilling {
     struct Storage {
         owner: ContractAddress,
         proof_verifier: ContractAddress,
+
+        // Configuration state - production-grade initialization pattern
+        // Circular dependencies set via configure() and locked via finalize()
         proof_gated_payment: ContractAddress,
         optimistic_tee: ContractAddress,
+        configured: bool,   // True once configure() is called
+        finalized: bool,    // True once finalize() is called - locks forever
 
         // GPU tier rates (can be updated by admin)
         hourly_rates: Map<u8, u256>,  // GPUTier as u8 -> rate
@@ -247,6 +280,11 @@ mod MeteredBilling {
         total_metered_jobs: u64,
         total_compute_hours: u256,
         total_sage_distributed: u256,
+
+        // Upgrade storage
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
     }
 
     #[event]
@@ -259,6 +297,9 @@ mod MeteredBilling {
         CheckpointPaid: CheckpointPaid,
         WorkerGPURegistered: WorkerGPURegistered,
         HourlyRateUpdated: HourlyRateUpdated,
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -336,18 +377,44 @@ mod MeteredBilling {
         timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        #[key]
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        execute_after: u64,
+        scheduled_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        #[key]
+        new_class_hash: ClassHash,
+        executed_at: u64,
+        executed_by: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        #[key]
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+        cancelled_by: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(
         ref self: ContractState,
         owner: ContractAddress,
-        proof_verifier: ContractAddress,
-        proof_gated_payment: ContractAddress,
-        optimistic_tee: ContractAddress
+        proof_verifier: ContractAddress
     ) {
+        // Production-grade: Only immutable dependencies in constructor
+        // Circular dependencies (proof_gated_payment, optimistic_tee) set via configure()
+        assert!(!owner.is_zero(), "Invalid owner");
+        assert!(!proof_verifier.is_zero(), "Invalid proof verifier");
+
         self.owner.write(owner);
         self.proof_verifier.write(proof_verifier);
-        self.proof_gated_payment.write(proof_gated_payment);
-        self.optimistic_tee.write(optimistic_tee);
 
         // Initialize default hourly rates
         self.hourly_rates.write(0, RATE_H100);      // GPUTier::H100
@@ -357,6 +424,11 @@ mod MeteredBilling {
         self.hourly_rates.write(4, RATE_OTHER);     // GPUTier::Other
 
         self.checkpoint_counter.write(0);
+        self.upgrade_delay.write(172800); // 2 days
+
+        // Configuration state
+        self.configured.write(false);
+        self.finalized.write(false);
     }
 
     #[abi(embed_v0)]
@@ -736,19 +808,130 @@ mod MeteredBilling {
             });
         }
 
+        // === Production-grade Configuration Functions ===
+
+        fn configure(
+            ref self: ContractState,
+            proof_gated_payment: ContractAddress,
+            optimistic_tee: ContractAddress
+        ) {
+            self._only_owner();
+            assert!(!self.finalized.read(), "Configuration locked");
+            assert!(!proof_gated_payment.is_zero(), "Invalid proof gated payment");
+            assert!(!optimistic_tee.is_zero(), "Invalid optimistic TEE");
+
+            self.proof_gated_payment.write(proof_gated_payment);
+            self.optimistic_tee.write(optimistic_tee);
+            self.configured.write(true);
+        }
+
+        fn finalize_configuration(ref self: ContractState) {
+            self._only_owner();
+            assert!(self.configured.read(), "Not configured");
+            assert!(!self.finalized.read(), "Already finalized");
+
+            self.finalized.write(true);
+        }
+
+        fn is_contract_configured(self: @ContractState) -> bool {
+            self.configured.read()
+        }
+
+        fn is_configuration_locked(self: @ContractState) -> bool {
+            self.finalized.read()
+        }
+
         fn set_proof_gated_payment(ref self: ContractState, payment: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Configuration locked");
             self.proof_gated_payment.write(payment);
         }
 
         fn set_proof_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Configuration locked");
             self.proof_verifier.write(verifier);
         }
 
         fn set_optimistic_tee(ref self: ContractState, tee: ContractAddress) {
             self._only_owner();
+            assert!(!self.finalized.read(), "Configuration locked");
             self.optimistic_tee.write(tee);
+        }
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending == zero_hash, 'Upgrade already pending');
+
+            let now = get_block_timestamp();
+            let delay = self.upgrade_delay.read();
+
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                execute_after: now + delay,
+                scheduled_by: get_caller_address(),
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending != zero_hash, 'No pending upgrade');
+
+            let now = get_block_timestamp();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            assert(now >= scheduled_at + delay, 'Timelock not expired');
+
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+                executed_by: get_caller_address(),
+            });
+
+            replace_class_syscall(pending).unwrap_syscall();
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            let zero_hash: ClassHash = 0.try_into().unwrap();
+            assert(pending != zero_hash, 'No pending upgrade');
+
+            self.pending_upgrade.write(zero_hash);
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+                cancelled_by: get_caller_address(),
+            });
+        }
+
+        fn get_upgrade_info(self: @ContractState) -> (ClassHash, u64, u64) {
+            let pending = self.pending_upgrade.read();
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let execute_after = if scheduled_at > 0 { scheduled_at + delay } else { 0 };
+            (pending, scheduled_at, execute_after)
+        }
+
+        fn set_upgrade_delay(ref self: ContractState, delay: u64) {
+            self._only_owner();
+            self.upgrade_delay.write(delay);
         }
     }
 
