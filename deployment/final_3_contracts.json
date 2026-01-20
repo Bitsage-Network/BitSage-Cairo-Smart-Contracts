@@ -1,0 +1,29 @@
+{
+  "network": "sepolia",
+  "deployer": "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
+  "deployed_at": "2025-12-31T15:30:22.979Z",
+  "contracts": {
+    "SAGEToken": "0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850",
+    "PaymentRouter": "0x6a0639e673febf90b6a6e7d3743c81f96b39a3037b60429d479c62c5d20d41",
+    "CDCPool": "0x1f978cad424f87a6cea8aa27cbcbba10b9a50d41e296ae07e1c635392a2339",
+    "JobManager": "0x355b8c5e9dd3310a3c361559b53cfcfdc20b2bf7d5bd87a84a83389b8cbb8d3",
+    "PrivacyRouter": "0x7d1a6c242a4f0573696e117790f431fd60518a000b85fe5ee507456049ffc53"
+  },
+  "results": {
+    "deployed": [
+      {
+        "name": "CDCPool",
+        "address": "0x1f978cad424f87a6cea8aa27cbcbba10b9a50d41e296ae07e1c635392a2339"
+      },
+      {
+        "name": "JobManager",
+        "address": "0x355b8c5e9dd3310a3c361559b53cfcfdc20b2bf7d5bd87a84a83389b8cbb8d3"
+      },
+      {
+        "name": "PrivacyRouter",
+        "address": "0x7d1a6c242a4f0573696e117790f431fd60518a000b85fe5ee507456049ffc53"
+      }
+    ],
+    "failed": []
+  }
+}

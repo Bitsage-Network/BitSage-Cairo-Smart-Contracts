@@ -1,0 +1,34 @@
+{
+  "network": "sepolia",
+  "deployer": "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
+  "deployed_at": "2025-12-31T08:45:46.718Z",
+  "all_contracts": {
+    "SAGEToken": "0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850",
+    "OracleWrapper": "0x4d86bb472cb462a45d68a705a798b5e419359a5758d84b24af4bbe5441b6e5a",
+    "ProverStaking": "0x3287a0af5ab2d74fbf968204ce2291adde008d645d42bc363cb741ebfa941b",
+    "PaymentRouter": "0x6a0639e673febf90b6a6e7d3743c81f96b39a3037b60429d479c62c5d20d41",
+    "PrivacyPools": "0xd85ad03dcd91a075bef0f4226149cb7e43da795d2c1d33e3227c68bfbb78a7"
+  },
+  "new_deployments": [],
+  "initialized": [
+    {
+      "name": "PrivacyPools",
+      "address": "0xd85ad03dcd91a075bef0f4226149cb7e43da795d2c1d33e3227c68bfbb78a7",
+      "tx": "0x2022e383bfd175345f053e75d211bca91ba64059c66d227cb930c4190569ced"
+    }
+  ],
+  "failed": [
+    {
+      "name": "CDCPool",
+      "error": "Failed to declare CDCPool after 5 attempts"
+    },
+    {
+      "name": "JobManager",
+      "error": "Failed to declare JobManager after 5 attempts"
+    },
+    {
+      "name": "PrivacyRouter",
+      "error": "Failed to declare PrivacyRouter after 5 attempts"
+    }
+  ]
+}

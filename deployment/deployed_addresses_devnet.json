@@ -1,0 +1,40 @@
+{
+  "network": "devnet",
+  "rpc_url": "http://localhost:5050",
+  "deployer": "0x064b48806902a367c8598f4f95c305e8c1a1acba5f082d294a43793113115691",
+  "deployed_at": "2025-12-30T06:30:00Z",
+  "contracts": {
+    "SAGEToken": {
+      "class_hash": "0x05f103b27a5b6a6a79f5a4861c678fee14c41976b75f25ae082263f9cb6bedd9",
+      "address": "0x00f5179bcf2954914cf1a3f8f5559daef12ebb88c979e271addee2d4d238e9e4"
+    },
+    "ProverStaking": {
+      "class_hash": "0x05ca3b5031bfcf43dfc59ebfed5fd65570bc98efeb55bd09721f7e37e3fcddc0",
+      "address": "0x0252a5254cd36e3ad9cfce6ed2a045705b2d338353d70846df12ece7bd34825e"
+    },
+    "Faucet": {
+      "class_hash": "0x00502015b2d24dc7729b11e1dd50e8baef906683bb1376e981d5006305eea3d9",
+      "address": "0x0332e097588cd3f79ef539fe84569cc93c99867833cd221dc17038e0e23ec85f"
+    },
+    "CDCPool": {
+      "class_hash": "0x013e9738420924014999abb79f3733621961449a7a764a6782bd2f45c5e58b31",
+      "address": "0x072230fd66094accd11b5b9c0c84902dd12f4ec327719181f824fe190fc72839"
+    },
+    "JobManager": {
+      "class_hash": "0x07324358bc0e496c9a48a523f779aac43869a0ae2ddc1fd654001b4d1f3431e2",
+      "address": "0x04ee0ad6badcfd2a16a681084f992d4cf4f98c5510c9584928ebedeab0b5f253"
+    },
+    "ReputationManager": {
+      "class_hash": "0x00b0a1e5d58af4cc3cc263971863a7d21b920328ae3cc2266394e866093369fb",
+      "address": "0x02f2a0fb73c1f6289927857ce5eb41ac0126dbdd3e3428e34b76de2f73222d35"
+    },
+    "ProofVerifier": {
+      "class_hash": "0x0619514cc939dbf8b6aedb9df253a171f607d5a13a1cb260e20c2eb8916b5470",
+      "address": "0x00659f64441879f0277c4be44644b244e254bbac55842387931a6b2d42b287a3"
+    },
+    "StwoVerifier": {
+      "class_hash": "0x01c774714a6f0ce2fa272651184e72e4ea451f43f44797497b93495eeb287582",
+      "address": "0x030db9d744badbdf91238183c1b5b6c00754f157c848d7881be8006d80d6876f"
+    }
+  }
+}

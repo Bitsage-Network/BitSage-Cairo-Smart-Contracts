@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-01-13T22:06:20.260Z",
+  "network": "sepolia",
+  "contracts": {
+    "otcOrderbook": "0x7b2b59d93764ccf1ea85edca2720c37bba7742d05a2791175982eaa59cedef0",
+    "sageToken": "0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850"
+  },
+  "tokens": {
+    "STRK": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "ETH": "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7",
+    "USDC": "0x053c91253bc9682c04929ca02ed00b3e423f6710d2ee7e0d5ebb06f3ecf368a8"
+  },
+  "wallets": {
+    "treasury": {
+      "name": "Treasury",
+      "address": "0x6c2fc54050e474dc07637f42935ca6e18e8e17ab7bf9835504c85515beb860",
+      "description": "Fee collection, operations, protocol development",
+      "allocation": "15%",
+      "tokens": 150000000
+    },
+    "marketLiquidity": {
+      "name": "Market Liquidity",
+      "address": "0x2a4b7dbd8723e57fd03250207dd0633561a3b222ac84f28d5b6228b33e4aef1",
+      "description": "OTC orderbook market making, DEX liquidity",
+      "allocation": "10%",
+      "tokens": 100000000
+    },
+    "ecosystemRewards": {
+      "name": "Ecosystem Rewards",
+      "address": "0x402fb3031f8d1004538b0ab48054431e69a265fb53b645180de6044c333fc53",
+      "description": "Mining rewards, staking, community incentives",
+      "allocation": "30%",
+      "tokens": 300000000
+    },
+    "publicSale": {
+      "name": "Public Sale",
+      "address": "0x5c3970100383ae00e135b92794fc0fc5f4537eb553e92e7d23efa352c253376",
+      "description": "Community token sale distribution",
+      "allocation": "5%",
+      "tokens": 50000000
+    }
+  },
+  "keystoreDirectory": "/Users/vaamx/bitsage-network/BitSage-Cairo-Smart-Contracts/deployment/pool_wallets/keystores"
+}
