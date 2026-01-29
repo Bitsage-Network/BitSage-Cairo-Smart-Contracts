@@ -22,6 +22,7 @@ airdrop/keystores/
 
 # Deploy scripts with credentials (use environment variables instead)
 deploy_*.mjs
+!scripts/deploy_paymaster_v2.mjs
 sign_deploy*.mjs
 
 # Environment files
