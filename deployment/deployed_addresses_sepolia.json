@@ -151,6 +151,18 @@
     "DynamicPricing": {
       "class_hash": "0x26a14a47a2bbc3ae44ccb7bb8fd92159943a031ea5bf444e5299b44174c5d7b",
       "address": "0x3f2893e9c9ed09cbfd007016291823ad2e48f82827f301295efa9b955346be7"
+    },
+    "Paymaster": {
+      "class_hash": "0x273b59131f7f212f7900b87561e8b458b2edbd568b386b3c6d38fca6bb44e8a",
+      "address": "0x3370e353a2f3f6880f1a90708792279b8dc9d03b8560d7a95dfa08b9f9ed8bb"
+    },
+    "PaymasterV2": {
+      "class_hash": "0x77d580e045ce2dd170c030ea4209176ce9e52008eab597f61b1a898168029dd",
+      "address": "0x35e837e4c0ac10809f0f076ddc40c16b4faa4f1d20578a9016d6bce7c6c4b06"
+    },
+    "PaymasterV1_deprecated": {
+      "class_hash": "0x273b59131f7f212f7900b87561e8b458b2edbd568b386b3c6d38fca6bb44e8a",
+      "address": "0x3370e353a2f3f6880f1a90708792279b8dc9d03b8560d7a95dfa08b9f9ed8bb"
     }
   },
   "notes": [

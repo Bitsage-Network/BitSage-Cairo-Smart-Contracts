@@ -1,4 +1,4 @@
-use starknet::ContractAddress;
+use starknet::{ContractAddress, ClassHash};
 use super::job_manager::{JobId, ModelId};
 
 /// Subscription tiers for gas sponsorship
@@ -327,6 +327,87 @@ pub trait IPaymaster<TContractState> {
         self: @TContractState,
         account: ContractAddress
     ) -> Array<felt252>;
+
+    // ========================================================================
+    // V2: Paymaster Protocol Hooks (SNIP-13)
+    // ========================================================================
+
+    /// Validate a paymaster sponsorship request (protocol-level hook)
+    fn __validate_paymaster__(
+        ref self: TContractState,
+        caller: ContractAddress,
+        target: ContractAddress,
+        selector: felt252,
+        estimated_fee: u256
+    ) -> bool;
+
+    /// Execute paymaster accounting after sponsored tx (protocol-level hook)
+    fn __execute_paymaster__(
+        ref self: TContractState,
+        caller: ContractAddress,
+        target: ContractAddress,
+        selector: felt252,
+        actual_fee: u256
+    );
+
+    // ========================================================================
+    // V2: Timelock Upgrade Mechanism
+    // ========================================================================
+
+    /// Schedule a class hash upgrade with timelock delay
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+
+    /// Execute a scheduled upgrade after delay has passed
+    fn execute_upgrade(ref self: TContractState);
+
+    /// Cancel a pending upgrade
+    fn cancel_upgrade(ref self: TContractState);
+
+    /// Get pending upgrade info (class_hash, scheduled_at)
+    fn get_pending_upgrade(self: @TContractState) -> (ClassHash, u64);
+
+    // ========================================================================
+    // V2: Configuration
+    // ========================================================================
+
+    /// One-time V2 initialization with verifier and staking addresses
+    fn initialize_v2(
+        ref self: TContractState,
+        prover_staking: ContractAddress,
+        proof_verifier: ContractAddress,
+        stwo_verifier: ContractAddress
+    );
+
+    /// Set the ProverStaking contract address for eligibility checks
+    fn set_prover_staking(ref self: TContractState, prover_staking: ContractAddress);
+
+    /// Set the ProofVerifier contract address (allowed target)
+    fn set_proof_verifier(ref self: TContractState, proof_verifier: ContractAddress);
+
+    /// Set the StwoVerifier contract address (allowed target)
+    fn set_stwo_verifier(ref self: TContractState, stwo_verifier: ContractAddress);
+
+    /// Set per-epoch spending cap and epoch duration
+    fn set_spending_cap(ref self: TContractState, max_per_epoch: u256, epoch_duration: u64);
+
+    // ========================================================================
+    // V2: View Functions
+    // ========================================================================
+
+    /// Get epoch stats: (epoch_start, epoch_spent, max_epoch_spend, epoch_duration)
+    fn get_epoch_stats(self: @TContractState) -> (u64, u256, u256, u64);
+
+    /// Get the ProverStaking contract address
+    fn get_prover_staking(self: @TContractState) -> ContractAddress;
+
+    /// Get the ProofVerifier contract address
+    fn get_proof_verifier(self: @TContractState) -> ContractAddress;
+
+    /// Get the StwoVerifier contract address
+    fn get_stwo_verifier(self: @TContractState) -> ContractAddress;
+
+    /// Check if a target contract is in the allowed set
+    fn is_allowed_target(self: @TContractState, target: ContractAddress) -> bool;
 }
 
 // ============================================================================

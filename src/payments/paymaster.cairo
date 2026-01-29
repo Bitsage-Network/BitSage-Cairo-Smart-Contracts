@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2025 BitSage Network Foundation
 //
-// Paymaster Contract - Gas Abstraction for Privacy Operations
-// Sponsors gas fees for privacy transactions to prevent gas payment linkage
-// Supports: Privacy deposits, withdrawals, transfers, and worker operations
+// PaymasterV2 Contract - Production-Hardened Gas Abstraction
+// Features:
+//   - __validate_paymaster__ / __execute_paymaster__ protocol hooks (SNIP-13)
+//   - 5-minute timelock upgrade mechanism via replace_class_syscall
+//   - Cross-contract call to ProverStaking for worker eligibility
+//   - Per-epoch spending caps
+//   - Restricted target contracts (ProofVerifier + StwoVerifier only)
+//   - Relay fallback via sponsor_transaction()
+//   - Emergency withdraw_funds()
 
 use starknet::{ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_tx_info};
 use core::num::traits::Zero;
@@ -76,19 +82,19 @@ pub trait IPaymaster<TContractState> {
         request: SponsorshipRequest,
         calldata: Array<felt252>,
         user_signature: Array<felt252>
-    ) -> felt252; // Returns tx hash
+    ) -> felt252;
 
     fn validate_sponsorship(
         self: @TContractState,
         request: SponsorshipRequest
-    ) -> (bool, felt252); // (is_valid, reason)
+    ) -> (bool, felt252);
 
     fn get_sponsorship_quote(
         self: @TContractState,
         target_contract: ContractAddress,
         function_selector: felt252,
         calldata_len: u32
-    ) -> u256; // Returns estimated gas cost
+    ) -> u256;
 
     // Subscription management
     fn create_subscription(
@@ -154,7 +160,57 @@ pub trait IPaymaster<TContractState> {
     fn get_account_stats(
         self: @TContractState,
         account: ContractAddress
-    ) -> (u256, u32, u64); // (total_gas, tx_count, last_sponsored)
+    ) -> (u256, u32, u64);
+
+    // ========================================================================
+    // V2: Paymaster Protocol Hooks (SNIP-13)
+    // ========================================================================
+    fn __validate_paymaster__(
+        ref self: TContractState,
+        caller: ContractAddress,
+        target: ContractAddress,
+        selector: felt252,
+        estimated_fee: u256
+    ) -> bool;
+
+    fn __execute_paymaster__(
+        ref self: TContractState,
+        caller: ContractAddress,
+        target: ContractAddress,
+        selector: felt252,
+        actual_fee: u256
+    );
+
+    // ========================================================================
+    // V2: Timelock Upgrade Mechanism
+    // ========================================================================
+    fn schedule_upgrade(ref self: TContractState, new_class_hash: ClassHash);
+    fn execute_upgrade(ref self: TContractState);
+    fn cancel_upgrade(ref self: TContractState);
+    fn get_pending_upgrade(self: @TContractState) -> (ClassHash, u64);
+
+    // ========================================================================
+    // V2: Configuration
+    // ========================================================================
+    fn initialize_v2(
+        ref self: TContractState,
+        prover_staking: ContractAddress,
+        proof_verifier: ContractAddress,
+        stwo_verifier: ContractAddress
+    );
+    fn set_prover_staking(ref self: TContractState, prover_staking: ContractAddress);
+    fn set_proof_verifier(ref self: TContractState, proof_verifier: ContractAddress);
+    fn set_stwo_verifier(ref self: TContractState, stwo_verifier: ContractAddress);
+    fn set_spending_cap(ref self: TContractState, max_per_epoch: u256, epoch_duration: u64);
+
+    // ========================================================================
+    // V2: View Functions
+    // ========================================================================
+    fn get_epoch_stats(self: @TContractState) -> (u64, u256, u256, u64);
+    fn get_prover_staking(self: @TContractState) -> ContractAddress;
+    fn get_proof_verifier(self: @TContractState) -> ContractAddress;
+    fn get_stwo_verifier(self: @TContractState) -> ContractAddress;
+    fn is_allowed_target(self: @TContractState, target: ContractAddress) -> bool;
 }
 
 #[starknet::contract]
@@ -165,13 +221,20 @@ pub mod Paymaster {
     };
     use starknet::{
         ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
-        get_contract_address, get_tx_info, syscalls::call_contract_syscall,
+        get_contract_address, get_tx_info,
+        syscalls::{call_contract_syscall, replace_class_syscall},
         storage::{StoragePointerReadAccess, StoragePointerWriteAccess,
                   StorageMapReadAccess, StorageMapWriteAccess}
     };
     use core::num::traits::Zero;
     use core::poseidon::poseidon_hash_span;
     use core::array::ArrayTrait;
+
+    // Cross-contract interface for ProverStaking eligibility check
+    #[starknet::interface]
+    trait IProverStaking<TContractState> {
+        fn is_eligible(self: @TContractState, worker: ContractAddress) -> bool;
+    }
 
     // ERC20 interface for fee token
     #[starknet::interface]
@@ -190,6 +253,7 @@ pub mod Paymaster {
     // Storage
     #[storage]
     struct Storage {
+        // === V1 Storage (preserved layout) ===
         owner: ContractAddress,
         config: PaymasterConfig,
         initialized: bool,
@@ -217,6 +281,28 @@ pub mod Paymaster {
 
         // Nonce tracking for replay protection
         nonces: LegacyMap<ContractAddress, u64>,
+
+        // === V2 Storage (appended) ===
+        // Timelock upgrade
+        pending_upgrade: ClassHash,
+        upgrade_scheduled_at: u64,
+        upgrade_delay: u64,
+
+        // Cross-contract eligibility
+        prover_staking: ContractAddress,
+
+        // Allowed target contracts
+        proof_verifier: ContractAddress,
+        stwo_verifier: ContractAddress,
+
+        // Per-epoch spending caps
+        epoch_start: u64,
+        epoch_spent: u256,
+        max_epoch_spend: u256,
+        epoch_duration: u64,
+
+        // V2 initialized flag
+        v2_initialized: bool,
     }
 
     // Events
@@ -232,6 +318,15 @@ pub mod Paymaster {
         FundsWithdrawn: FundsWithdrawn,
         Paused: Paused,
         Resumed: Resumed,
+        // V2 Events
+        UpgradeScheduled: UpgradeScheduled,
+        UpgradeExecuted: UpgradeExecuted,
+        UpgradeCancelled: UpgradeCancelled,
+        PaymasterValidation: PaymasterValidation,
+        PaymasterExecution: PaymasterExecution,
+        V2Initialized: V2Initialized,
+        SpendingCapUpdated: SpendingCapUpdated,
+        EpochReset: EpochReset,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -304,6 +399,68 @@ pub mod Paymaster {
         timestamp: u64,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeScheduled {
+        new_class_hash: ClassHash,
+        scheduled_at: u64,
+        executable_at: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeExecuted {
+        new_class_hash: ClassHash,
+        executed_at: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct UpgradeCancelled {
+        cancelled_class_hash: ClassHash,
+        cancelled_at: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct PaymasterValidation {
+        #[key]
+        caller: ContractAddress,
+        #[key]
+        target: ContractAddress,
+        selector: felt252,
+        approved: bool,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct PaymasterExecution {
+        #[key]
+        caller: ContractAddress,
+        #[key]
+        target: ContractAddress,
+        selector: felt252,
+        fee: u256,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct V2Initialized {
+        prover_staking: ContractAddress,
+        proof_verifier: ContractAddress,
+        stwo_verifier: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct SpendingCapUpdated {
+        max_per_epoch: u256,
+        epoch_duration: u64,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct EpochReset {
+        new_epoch_start: u64,
+        previous_spent: u256,
+    }
+
     // Constants
     const SECONDS_PER_DAY: u64 = 86400;
     const SECONDS_PER_HOUR: u64 = 3600;
@@ -311,17 +468,22 @@ pub mod Paymaster {
     const DEFAULT_BASIC_DAILY_LIMIT: u256 = 1000000000000000000; // 1 ETH worth
     const DEFAULT_PREMIUM_DAILY_LIMIT: u256 = 10000000000000000000; // 10 ETH worth
     const DEFAULT_RATE_LIMIT: u32 = 100; // 100 requests per hour
+    const DEFAULT_UPGRADE_DELAY: u64 = 300; // 5 minutes
+    const DEFAULT_EPOCH_DURATION: u64 = 3600; // 1 hour
+    // 100 STRK = 100 * 10^18
+    const DEFAULT_MAX_EPOCH_SPEND: u256 = 100000000000000000000;
 
     // Privacy function selectors (pre-computed)
-    // pp_deposit selector
     const PP_DEPOSIT_SELECTOR: felt252 = 0x02e4d2d5e12b2e5b1c5e8a9f3d7c6b4a1e8f2d3c5a7b9e1f4d6c8a2b3e5f7d9;
-    // pp_withdraw selector
     const PP_WITHDRAW_SELECTOR: felt252 = 0x03f5e3e6f13c3f6c2d6f9b0e4e8d7c5b2f9e3d4c6b8a0f2e5d7c9a3b4e6f8d0;
-    // private_transfer selector
     const PRIVATE_TRANSFER_SELECTOR: felt252 = 0x04a6f4f7a24d4a7d3e7a0c1f5f9e8d6c3a0f4e5d7c9b1a3e6f8d0b2c4e7f9a1;
 
     #[abi(embed_v0)]
-    impl PaymasterImpl of IPaymaster<ContractState> {
+    impl PaymasterImpl of super::IPaymaster<ContractState> {
+        // ====================================================================
+        // V1 Functions (preserved)
+        // ====================================================================
+
         fn initialize(
             ref self: ContractState,
             owner: ContractAddress,
@@ -338,15 +500,17 @@ pub mod Paymaster {
                 fee_token,
                 privacy_router,
                 privacy_pools,
-                max_gas_per_tx: 10000000000000000000, // 10 ETH max per tx
-                max_gas_per_day: 100000000000000000000, // 100 ETH max per day
+                max_gas_per_tx: 10000000000000000000,
+                max_gas_per_day: 100000000000000000000,
                 free_tier_daily_limit: DEFAULT_FREE_DAILY_LIMIT,
                 basic_tier_daily_limit: DEFAULT_BASIC_DAILY_LIMIT,
                 premium_tier_daily_limit: DEFAULT_PREMIUM_DAILY_LIMIT,
             };
             self.config.write(config);
 
-            // Register default sponsorable functions (privacy operations)
+            // Set default upgrade delay
+            self.upgrade_delay.write(DEFAULT_UPGRADE_DELAY);
+
             self._register_privacy_functions(privacy_router, privacy_pools);
 
             self.emit(Initialized {
@@ -362,37 +526,30 @@ pub mod Paymaster {
             calldata: Array<felt252>,
             user_signature: Array<felt252>
         ) -> felt252 {
-            // Validation
             assert!(!self.paused.read(), "Paymaster is paused");
             assert!(!self.blacklist.read(request.account), "Account is blacklisted");
 
-            // Validate the sponsorship request
-            let (is_valid, reason) = self.validate_sponsorship(request);
+            let (is_valid, _reason) = self.validate_sponsorship(request);
             assert!(is_valid, "Sponsorship validation failed");
 
-            // Check nonce for replay protection
             let expected_nonce = self.nonces.read(request.account);
             assert!(request.nonce == expected_nonce, "Invalid nonce");
 
-            // Update nonce
             self.nonces.write(request.account, expected_nonce + 1);
 
-            // Check and update daily allowance
             self._check_and_update_allowance(request.account, request.estimated_gas);
-
-            // Update rate limit
             self._update_rate_limit(request.account);
 
-            // Execute the transaction via low-level call
-            // In production, this would use account abstraction
-            let result = call_contract_syscall(
+            // V2: Check epoch spending cap
+            self._check_and_update_epoch_spend(request.estimated_gas);
+
+            let _result = call_contract_syscall(
                 request.target_contract,
                 request.function_selector,
                 calldata.span()
             );
 
-            // Generate transaction hash for tracking
-            let mut hash_input: Array<felt252> = array![
+            let hash_input: Array<felt252> = array![
                 request.account.into(),
                 request.target_contract.into(),
                 request.function_selector,
@@ -400,7 +557,6 @@ pub mod Paymaster {
             ];
             let tx_hash = poseidon_hash_span(hash_input.span());
 
-            // Update stats
             let prev_total = self.account_total_sponsored.read(request.account);
             self.account_total_sponsored.write(request.account, prev_total + request.estimated_gas);
 
@@ -427,7 +583,6 @@ pub mod Paymaster {
             self: @ContractState,
             request: SponsorshipRequest
         ) -> (bool, felt252) {
-            // Check if function is sponsorable
             let function_key = self._get_function_key(
                 request.target_contract,
                 request.function_selector
@@ -436,23 +591,19 @@ pub mod Paymaster {
                 return (false, 'Function not sponsorable');
             }
 
-            // Check blacklist
             if self.blacklist.read(request.account) {
                 return (false, 'Account blacklisted');
             }
 
-            // Check rate limit
             if !self._check_rate_limit_internal(request.account) {
                 return (false, 'Rate limit exceeded');
             }
 
-            // Check daily allowance
             let remaining = self._get_remaining_allowance(request.account);
             if remaining < request.estimated_gas {
                 return (false, 'Daily limit exceeded');
             }
 
-            // Check paymaster balance
             let config = self.config.read();
             if request.estimated_gas > config.max_gas_per_tx {
                 return (false, 'Exceeds max gas per tx');
@@ -467,11 +618,9 @@ pub mod Paymaster {
             function_selector: felt252,
             calldata_len: u32
         ) -> u256 {
-            // Estimate gas based on function and calldata size
-            // Base cost + per-felt cost
-            let base_cost: u256 = 21000; // Base transaction cost
-            let per_felt_cost: u256 = 16; // Cost per calldata felt
-            let function_cost: u256 = 50000; // Estimated execution cost
+            let base_cost: u256 = 21000;
+            let per_felt_cost: u256 = 16;
+            let function_cost: u256 = 50000;
 
             base_cost + (per_felt_cost * calldata_len.into()) + function_cost
         }
@@ -489,9 +638,8 @@ pub mod Paymaster {
                 SubscriptionTier::Basic => self.config.read().basic_tier_daily_limit,
                 SubscriptionTier::Premium => self.config.read().premium_tier_daily_limit,
                 SubscriptionTier::Enterprise => {
-                    // Enterprise requires owner approval
                     assert!(self.allowlist.read(caller), "Enterprise requires allowlist");
-                    0xffffffffffffffffffffffffffffffff_u256 // Unlimited
+                    0xffffffffffffffffffffffffffffffff_u256
                 },
             };
 
@@ -506,7 +654,6 @@ pub mod Paymaster {
 
             self.subscriptions.write(caller, subscription);
 
-            // Set default rate limit
             let rate_limit = RateLimit {
                 requests_per_hour: DEFAULT_RATE_LIMIT,
                 current_count: 0,
@@ -624,7 +771,6 @@ pub mod Paymaster {
             let caller = get_caller_address();
             let config = self.config.read();
 
-            // Transfer tokens to paymaster
             let token = IERC20Dispatcher { contract_address: config.fee_token };
             token.transfer_from(caller, get_contract_address(), amount);
 
@@ -684,6 +830,287 @@ pub mod Paymaster {
                 self.account_last_sponsored.read(account)
             )
         }
+
+        // ====================================================================
+        // V2: Paymaster Protocol Hooks (SNIP-13)
+        // ====================================================================
+
+        fn __validate_paymaster__(
+            ref self: ContractState,
+            caller: ContractAddress,
+            target: ContractAddress,
+            selector: felt252,
+            estimated_fee: u256
+        ) -> bool {
+            // 1. Not paused
+            if self.paused.read() {
+                self.emit(PaymasterValidation {
+                    caller, target, selector, approved: false,
+                    timestamp: get_block_timestamp(),
+                });
+                return false;
+            }
+
+            // 2. Not blacklisted
+            if self.blacklist.read(caller) {
+                self.emit(PaymasterValidation {
+                    caller, target, selector, approved: false,
+                    timestamp: get_block_timestamp(),
+                });
+                return false;
+            }
+
+            // 3. Target must be proof_verifier or stwo_verifier
+            if !self._is_allowed_target(target) {
+                self.emit(PaymasterValidation {
+                    caller, target, selector, approved: false,
+                    timestamp: get_block_timestamp(),
+                });
+                return false;
+            }
+
+            // 4. Worker must be staked via ProverStaking.is_eligible()
+            let staking_addr = self.prover_staking.read();
+            if !staking_addr.is_zero() {
+                let staking = IProverStakingDispatcher { contract_address: staking_addr };
+                if !staking.is_eligible(caller) {
+                    self.emit(PaymasterValidation {
+                        caller, target, selector, approved: false,
+                        timestamp: get_block_timestamp(),
+                    });
+                    return false;
+                }
+            }
+
+            // 5. Rate limit check
+            if !self._check_rate_limit_internal(caller) {
+                self.emit(PaymasterValidation {
+                    caller, target, selector, approved: false,
+                    timestamp: get_block_timestamp(),
+                });
+                return false;
+            }
+
+            // 6. Epoch spending cap check
+            if !self._check_epoch_spend_ok(estimated_fee) {
+                self.emit(PaymasterValidation {
+                    caller, target, selector, approved: false,
+                    timestamp: get_block_timestamp(),
+                });
+                return false;
+            }
+
+            // 7. Function must be sponsorable
+            let function_key = self._get_function_key(target, selector);
+            if !self.sponsorable_functions.read(function_key) {
+                self.emit(PaymasterValidation {
+                    caller, target, selector, approved: false,
+                    timestamp: get_block_timestamp(),
+                });
+                return false;
+            }
+
+            self.emit(PaymasterValidation {
+                caller, target, selector, approved: true,
+                timestamp: get_block_timestamp(),
+            });
+
+            true
+        }
+
+        fn __execute_paymaster__(
+            ref self: ContractState,
+            caller: ContractAddress,
+            target: ContractAddress,
+            selector: felt252,
+            actual_fee: u256
+        ) {
+            // Update per-account stats
+            let prev_total = self.account_total_sponsored.read(caller);
+            self.account_total_sponsored.write(caller, prev_total + actual_fee);
+
+            let prev_count = self.account_tx_count.read(caller);
+            self.account_tx_count.write(caller, prev_count + 1);
+
+            self.account_last_sponsored.write(caller, get_block_timestamp());
+
+            // Update global stats
+            let prev_global = self.total_sponsored.read();
+            self.total_sponsored.write(prev_global + actual_fee);
+
+            // Update rate limit
+            self._update_rate_limit(caller);
+
+            // Update epoch spending
+            self._check_and_update_epoch_spend(actual_fee);
+
+            self.emit(PaymasterExecution {
+                caller,
+                target,
+                selector,
+                fee: actual_fee,
+                timestamp: get_block_timestamp(),
+            });
+        }
+
+        // ====================================================================
+        // V2: Timelock Upgrade Mechanism
+        // ====================================================================
+
+        fn schedule_upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self._only_owner();
+            assert!(!new_class_hash.is_zero(), "Invalid class hash");
+
+            let now = get_block_timestamp();
+            self.pending_upgrade.write(new_class_hash);
+            self.upgrade_scheduled_at.write(now);
+
+            let delay = self.upgrade_delay.read();
+            self.emit(UpgradeScheduled {
+                new_class_hash,
+                scheduled_at: now,
+                executable_at: now + delay,
+            });
+        }
+
+        fn execute_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            let scheduled_at = self.upgrade_scheduled_at.read();
+            let delay = self.upgrade_delay.read();
+            let now = get_block_timestamp();
+            assert!(now >= scheduled_at + delay, "Upgrade delay not elapsed");
+
+            // Clear pending upgrade before executing
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            replace_class_syscall(pending).unwrap();
+
+            self.emit(UpgradeExecuted {
+                new_class_hash: pending,
+                executed_at: now,
+            });
+        }
+
+        fn cancel_upgrade(ref self: ContractState) {
+            self._only_owner();
+
+            let pending = self.pending_upgrade.read();
+            assert!(!pending.is_zero(), "No upgrade scheduled");
+
+            self.pending_upgrade.write(Zero::zero());
+            self.upgrade_scheduled_at.write(0);
+
+            self.emit(UpgradeCancelled {
+                cancelled_class_hash: pending,
+                cancelled_at: get_block_timestamp(),
+            });
+        }
+
+        fn get_pending_upgrade(self: @ContractState) -> (ClassHash, u64) {
+            (self.pending_upgrade.read(), self.upgrade_scheduled_at.read())
+        }
+
+        // ====================================================================
+        // V2: Configuration
+        // ====================================================================
+
+        fn initialize_v2(
+            ref self: ContractState,
+            prover_staking: ContractAddress,
+            proof_verifier: ContractAddress,
+            stwo_verifier: ContractAddress
+        ) {
+            self._only_owner();
+            assert!(!self.v2_initialized.read(), "V2 already initialized");
+
+            self.prover_staking.write(prover_staking);
+            self.proof_verifier.write(proof_verifier);
+            self.stwo_verifier.write(stwo_verifier);
+
+            // Set default epoch config
+            let now = get_block_timestamp();
+            self.epoch_start.write(now);
+            self.epoch_spent.write(0);
+            self.max_epoch_spend.write(DEFAULT_MAX_EPOCH_SPEND);
+            self.epoch_duration.write(DEFAULT_EPOCH_DURATION);
+
+            self.v2_initialized.write(true);
+
+            self.emit(V2Initialized {
+                prover_staking,
+                proof_verifier,
+                stwo_verifier,
+                timestamp: now,
+            });
+        }
+
+        fn set_prover_staking(ref self: ContractState, prover_staking: ContractAddress) {
+            self._only_owner();
+            self.prover_staking.write(prover_staking);
+        }
+
+        fn set_proof_verifier(ref self: ContractState, proof_verifier: ContractAddress) {
+            self._only_owner();
+            self.proof_verifier.write(proof_verifier);
+        }
+
+        fn set_stwo_verifier(ref self: ContractState, stwo_verifier: ContractAddress) {
+            self._only_owner();
+            self.stwo_verifier.write(stwo_verifier);
+        }
+
+        fn set_spending_cap(ref self: ContractState, max_per_epoch: u256, epoch_duration: u64) {
+            self._only_owner();
+            assert!(epoch_duration > 0, "Epoch duration must be > 0");
+
+            self.max_epoch_spend.write(max_per_epoch);
+            self.epoch_duration.write(epoch_duration);
+
+            // Reset current epoch
+            let now = get_block_timestamp();
+            self.epoch_start.write(now);
+            self.epoch_spent.write(0);
+
+            self.emit(SpendingCapUpdated {
+                max_per_epoch,
+                epoch_duration,
+                timestamp: now,
+            });
+        }
+
+        // ====================================================================
+        // V2: View Functions
+        // ====================================================================
+
+        fn get_epoch_stats(self: @ContractState) -> (u64, u256, u256, u64) {
+            (
+                self.epoch_start.read(),
+                self.epoch_spent.read(),
+                self.max_epoch_spend.read(),
+                self.epoch_duration.read()
+            )
+        }
+
+        fn get_prover_staking(self: @ContractState) -> ContractAddress {
+            self.prover_staking.read()
+        }
+
+        fn get_proof_verifier(self: @ContractState) -> ContractAddress {
+            self.proof_verifier.read()
+        }
+
+        fn get_stwo_verifier(self: @ContractState) -> ContractAddress {
+            self.stwo_verifier.read()
+        }
+
+        fn is_allowed_target(self: @ContractState, target: ContractAddress) -> bool {
+            self._is_allowed_target(target)
+        }
     }
 
     // Internal functions
@@ -708,9 +1135,8 @@ pub mod Paymaster {
             let rate_limit = self.rate_limits.read(account);
             let now = get_block_timestamp();
 
-            // Reset window if expired
             if now > rate_limit.window_start + SECONDS_PER_HOUR {
-                return true; // Will be reset on update
+                return true;
             }
 
             rate_limit.current_count < rate_limit.requests_per_hour
@@ -720,7 +1146,6 @@ pub mod Paymaster {
             let mut rate_limit = self.rate_limits.read(account);
             let now = get_block_timestamp();
 
-            // Reset window if expired
             if now > rate_limit.window_start + SECONDS_PER_HOUR {
                 rate_limit.window_start = now;
                 rate_limit.current_count = 1;
@@ -735,14 +1160,11 @@ pub mod Paymaster {
             let subscription = self.subscriptions.read(account);
             let now = get_block_timestamp();
 
-            // Check if subscription is active
             if !subscription.active || now > subscription.expiration {
-                // Use free tier for non-subscribers
                 let config = self.config.read();
                 return config.free_tier_daily_limit;
             }
 
-            // Reset daily usage if new day
             if now > subscription.last_reset + SECONDS_PER_DAY {
                 return subscription.daily_limit;
             }
@@ -762,17 +1184,15 @@ pub mod Paymaster {
             let subscription = self.subscriptions.read(account);
             let now = get_block_timestamp();
 
-            // Calculate new values
             let (new_daily_used, new_last_reset) = if now > subscription.last_reset + SECONDS_PER_DAY {
-                (gas_amount, now) // Reset and add new usage
+                (gas_amount, now)
             } else {
                 (subscription.daily_used + gas_amount, subscription.last_reset)
             };
 
-            // Check allowance
             let remaining = if subscription.active && now <= subscription.expiration {
                 if now > subscription.last_reset + SECONDS_PER_DAY {
-                    subscription.daily_limit // Full limit after reset
+                    subscription.daily_limit
                 } else {
                     subscription.daily_limit - subscription.daily_used
                 }
@@ -782,7 +1202,6 @@ pub mod Paymaster {
 
             assert!(gas_amount <= remaining, "Insufficient daily allowance");
 
-            // Write updated subscription
             let updated_subscription = Subscription {
                 tier: subscription.tier,
                 expiration: subscription.expiration,
@@ -799,18 +1218,73 @@ pub mod Paymaster {
             privacy_router: ContractAddress,
             privacy_pools: ContractAddress
         ) {
-            // Register privacy pool functions
-            // pp_deposit
             let key1 = self._get_function_key(privacy_pools, PP_DEPOSIT_SELECTOR);
             self.sponsorable_functions.write(key1, true);
 
-            // pp_withdraw
             let key2 = self._get_function_key(privacy_pools, PP_WITHDRAW_SELECTOR);
             self.sponsorable_functions.write(key2, true);
 
-            // private_transfer on privacy router
             let key3 = self._get_function_key(privacy_router, PRIVATE_TRANSFER_SELECTOR);
             self.sponsorable_functions.write(key3, true);
+        }
+
+        // V2: Check if target is an allowed contract
+        fn _is_allowed_target(self: @ContractState, target: ContractAddress) -> bool {
+            let pv = self.proof_verifier.read();
+            let sv = self.stwo_verifier.read();
+            // If V2 not configured (both zero), allow all targets (backwards compat)
+            if pv.is_zero() && sv.is_zero() {
+                return true;
+            }
+            target == pv || target == sv
+        }
+
+        // V2: Check if epoch spend would exceed cap (read-only)
+        fn _check_epoch_spend_ok(self: @ContractState, additional: u256) -> bool {
+            let max_spend = self.max_epoch_spend.read();
+            if max_spend.is_zero() {
+                return true; // No cap set
+            }
+
+            let epoch_dur = self.epoch_duration.read();
+            let epoch_st = self.epoch_start.read();
+            let now = get_block_timestamp();
+
+            // If epoch expired, spending resets to 0
+            if now >= epoch_st + epoch_dur {
+                return additional <= max_spend;
+            }
+
+            let current_spent = self.epoch_spent.read();
+            current_spent + additional <= max_spend
+        }
+
+        // V2: Update epoch spending tracker
+        fn _check_and_update_epoch_spend(ref self: ContractState, amount: u256) {
+            let max_spend = self.max_epoch_spend.read();
+            if max_spend.is_zero() {
+                return; // No cap set
+            }
+
+            let epoch_dur = self.epoch_duration.read();
+            let epoch_st = self.epoch_start.read();
+            let now = get_block_timestamp();
+
+            if now >= epoch_st + epoch_dur {
+                // Reset epoch
+                let previous_spent = self.epoch_spent.read();
+                self.epoch_start.write(now);
+                self.epoch_spent.write(amount);
+
+                self.emit(EpochReset {
+                    new_epoch_start: now,
+                    previous_spent,
+                });
+            } else {
+                let current = self.epoch_spent.read();
+                assert!(current + amount <= max_spend, "Epoch spending cap exceeded");
+                self.epoch_spent.write(current + amount);
+            }
         }
     }
 }
