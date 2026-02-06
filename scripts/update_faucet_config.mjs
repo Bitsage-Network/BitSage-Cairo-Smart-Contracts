@@ -10,7 +10,7 @@ const CONFIG = {
     rpcUrl: 'https://rpc.starknet-testnet.lava.build',
     deployer: {
         address: '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344',
-        privateKey: '0x_REDACTED_SEPOLIA_KEY',
+        privateKey: process.env.DEPLOYER_PRIVATE_KEY,
     },
     faucet: '0x62d3231450645503345e2e022b60a96aceff73898d26668f3389547a61471d3',
 };

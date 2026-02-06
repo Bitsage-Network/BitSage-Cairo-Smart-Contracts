@@ -22,7 +22,7 @@ if [ -z "${RPC_URL}" ]; then
     RPC_URL=$(jq -r '.rpc_url // empty' "$ROOT_DIR/../contracts.json")
   fi
 fi
-RPC_URL=${RPC_URL:-"https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_8/GUBwFqKhSgn4mwVbN6Sbn"}
+RPC_URL=${RPC_URL:-"https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_8/${ALCHEMY_API_KEY}"}
 
 # OpenZeppelin account class hash commonly used on Sepolia (OZ v0.7.x)
 OZ_CLASS_HASH=${OZ_CLASS_HASH:-0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564}

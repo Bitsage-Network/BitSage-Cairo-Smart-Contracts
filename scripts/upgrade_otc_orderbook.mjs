@@ -20,9 +20,9 @@ import fs from 'fs';
 
 // Configuration
 const CONFIG = {
-  rpcUrl: 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/GUBwFqKhSgn4mwVbN6Sbn',
+  rpcUrl: 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/${process.env.ALCHEMY_API_KEY}',
   deployerAddress: '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344',
-  deployerPrivateKey: '0x_REDACTED_SEPOLIA_KEY',
+  deployerPrivateKey: process.env.DEPLOYER_PRIVATE_KEY,
 };
 
 // OTC Orderbook contract

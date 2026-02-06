@@ -10,7 +10,7 @@ import http from 'http';
 import zlib from 'zlib';
 
 const DEPLOYER_ADDRESS = '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344';
-const DEPLOYER_PK = '0x_REDACTED_SEPOLIA_KEY';
+const DEPLOYER_PK = process.env.DEPLOYER_PRIVATE_KEY;
 
 // Various RPC endpoints to try
 const RPC_ENDPOINTS = [
@@ -19,7 +19,7 @@ const RPC_ENDPOINTS = [
   // Nethermind
   'https://free-rpc.nethermind.io/sepolia-juno/v0_7',
   // Try v0_6 which might be more lenient
-  'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_6/GUBwFqKhSgn4mwVbN6Sbn',
+  'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_6/${process.env.ALCHEMY_API_KEY}',
 ];
 
 async function loadContract() {
