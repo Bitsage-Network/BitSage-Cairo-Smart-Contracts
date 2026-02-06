@@ -23,11 +23,9 @@
 //   The router maps token addresses → privacy pool addresses via pool_registry.
 
 use starknet::ContractAddress;
-use starknet::storage::Map;
 use sage_contracts::obelysk::elgamal::ECPoint;
-use sage_contracts::obelysk::lean_imt::LeanIMTProof;
 use sage_contracts::obelysk::privacy_pools::{
-    PPWithdrawalProof, ExclusionProofData,
+    PPWithdrawalProof,
 };
 
 // ============================================================================
@@ -164,8 +162,6 @@ trait IPrivacyPool<TContractState> {
 // ERC20 Interface (approve + transfer)
 // ============================================================================
 
-use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
-
 // ============================================================================
 // Events
 // ============================================================================
@@ -209,7 +205,7 @@ pub mod ShieldedSwapRouter {
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 
     use super::{
-        ShieldedSwapRequest, PoolKey, SwapParameters, Delta, i129,
+        ShieldedSwapRequest,
         IEkuboCoreDispatcher, IEkuboCoreDispatcherTrait,
         IPrivacyPoolDispatcher, IPrivacyPoolDispatcherTrait,
         ShieldedSwapExecuted, PoolRegistered,
