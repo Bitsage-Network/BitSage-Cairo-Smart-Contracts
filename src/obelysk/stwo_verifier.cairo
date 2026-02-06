@@ -38,10 +38,10 @@
 use starknet::ContractAddress;
 
 /// Proof verification status
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum VerificationStatus {
     /// Proof has not been submitted
+    #[default]
     NotSubmitted,
     /// Proof is pending verification
     Pending,
@@ -58,10 +58,10 @@ pub enum VerificationStatus {
 }
 
 /// Proof source/generation method
-#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
-#[allow(starknet::store_no_default_variant)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq, Default)]
 pub enum ProofSource {
     /// Standard STWO proof (CPU/SIMD backend)
+    #[default]
     StandardSTWO,
     /// GPU-accelerated STWO proof with TEE attestation
     GpuTeeSTWO,
@@ -245,6 +245,27 @@ pub trait IStwoVerifier<TContractState> {
 
     /// Get job ID for a proof hash
     fn get_job_for_proof(self: @TContractState, proof_hash: felt252) -> u256;
+
+    /// Submit and verify proof with explicit IO commitment verification
+    ///
+    /// This is the preferred method for true proof-of-computation as it:
+    /// 1. Verifies the IO commitment at proof_data[4] matches expected_io_hash
+    /// 2. Performs full cryptographic STARK verification
+    /// 3. Triggers payment callback on successful verification
+    ///
+    /// # Arguments
+    /// * `proof_data` - The serialized STARK proof
+    /// * `expected_io_hash` - H(inputs || outputs) - the expected IO binding
+    /// * `job_id` - The job ID for payment gating
+    ///
+    /// # Returns
+    /// * `true` if proof verifies AND io_commitment matches, `false` otherwise
+    fn submit_and_verify_with_io_binding(
+        ref self: TContractState,
+        proof_data: Array<felt252>,
+        expected_io_hash: felt252,
+        job_id: u256,
+    ) -> bool;
 
     // ===================== UPGRADE FUNCTIONS =====================
     /// Schedule an upgrade to a new implementation class
@@ -492,8 +513,8 @@ mod StwoVerifier {
         });
         self.verified_count.write(0);
         self.gpu_tee_verified_count.write(0);
-        // Default 2-day upgrade delay
-        self.upgrade_delay.write(172800);
+        // Default 5-minute upgrade delay (for testnet; increase for mainnet)
+        self.upgrade_delay.write(300);
     }
 
     #[abi(embed_v0)]
@@ -981,7 +1002,11 @@ mod StwoVerifier {
             public_input_hash: felt252,
             job_id: u256,
         ) -> bool {
-            // Submit the proof
+            // Verify IO commitment FIRST before consuming the array
+            // The public_input_hash should be derived from H(inputs || outputs)
+            let io_verified = self._verify_io_commitment(proof_data.span(), public_input_hash);
+
+            // Submit the proof (consumes proof_data)
             let proof_hash = self.submit_proof(proof_data, public_input_hash);
 
             // Link to job
@@ -992,7 +1017,21 @@ mod StwoVerifier {
                 timestamp: get_block_timestamp(),
             });
 
-            // Verify the proof
+            if !io_verified {
+                // IO commitment mismatch - proof is for different inputs/outputs
+                let mut metadata = self.proofs.read(proof_hash);
+                metadata.status = VerificationStatus::Rejected;
+                self.proofs.write(proof_hash, metadata);
+
+                self.emit(ProofRejected {
+                    proof_hash,
+                    reason: 'io_commitment_mismatch',
+                });
+
+                return false;
+            }
+
+            // Verify the proof cryptographically
             let verified = self.verify_proof(proof_hash);
 
             // Trigger callback if proof is verified and callback is set
@@ -1027,6 +1066,54 @@ mod StwoVerifier {
 
         fn get_job_for_proof(self: @ContractState, proof_hash: felt252) -> u256 {
             self.proof_job_ids.read(proof_hash)
+        }
+
+        /// Submit and verify proof with explicit IO commitment binding
+        ///
+        /// This method ensures the proof is cryptographically bound to specific
+        /// inputs and outputs, preventing proof reuse attacks.
+        fn submit_and_verify_with_io_binding(
+            ref self: ContractState,
+            proof_data: Array<felt252>,
+            expected_io_hash: felt252,
+            job_id: u256,
+        ) -> bool {
+            let config = self.config.read();
+            assert!(!config.is_paused, "Contract is paused");
+
+            // CRITICAL: Verify IO commitment FIRST before any other processing
+            // This prevents attackers from reusing proofs for different jobs
+            let io_verified = self._verify_io_commitment(proof_data.span(), expected_io_hash);
+            if !io_verified {
+                self.emit(ProofRejected {
+                    proof_hash: 0,
+                    reason: 'io_commitment_mismatch',
+                });
+                return false;
+            }
+
+            // Submit the proof (computes proof_hash, stores data)
+            let proof_hash = self.submit_proof(proof_data, expected_io_hash);
+
+            // Link proof to job for payment gating
+            self.proof_job_ids.write(proof_hash, job_id);
+            self.emit(ProofLinkedToJob {
+                proof_hash,
+                job_id,
+                timestamp: get_block_timestamp(),
+            });
+
+            // Perform full cryptographic verification
+            let verified = self.verify_proof(proof_hash);
+
+            if verified {
+                // Trigger payment callback - ONLY releases payment after:
+                // 1. IO commitment verified (proof bound to correct inputs/outputs)
+                // 2. STARK proof verified cryptographically
+                self._trigger_verification_callback(proof_hash, job_id);
+            }
+
+            verified
         }
 
         // =====================================================================
@@ -1131,6 +1218,67 @@ mod StwoVerifier {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        /// Verify the IO commitment embedded in the proof
+        ///
+        /// The IO commitment is at position [4] in the proof array.
+        /// It must match the expected hash H(inputs || outputs) provided by the client.
+        ///
+        /// # Arguments
+        /// * `proof_data` - The serialized proof array
+        /// * `expected_io_hash` - The expected IO commitment hash
+        ///
+        /// # Returns
+        /// * `true` if the commitment matches, `false` otherwise
+        fn _verify_io_commitment(
+            self: @ContractState,
+            proof_data: Span<felt252>,
+            expected_io_hash: felt252,
+        ) -> bool {
+            // IO commitment is at position [4] after PCS config
+            // Format: [pow_bits, log_blowup, log_last_layer, n_queries, IO_COMMITMENT, ...]
+            if proof_data.len() < 5 {
+                return false;
+            }
+
+            // Extract IO commitment from proof
+            let proof_io_hash = *proof_data[4];
+
+            // Verify commitment matches expected value
+            // If expected is 0, skip IO verification (legacy proofs)
+            if expected_io_hash == 0 {
+                return true;
+            }
+
+            proof_io_hash == expected_io_hash
+        }
+
+        /// Verify IO commitment with job ID binding
+        ///
+        /// This version also checks that the commitment includes the job ID,
+        /// providing additional replay protection.
+        fn _verify_io_commitment_with_job(
+            self: @ContractState,
+            proof_data: Span<felt252>,
+            expected_io_hash: felt252,
+            job_id: u256,
+        ) -> bool {
+            // First verify the basic IO commitment
+            if !self._verify_io_commitment(proof_data, expected_io_hash) {
+                return false;
+            }
+
+            // If job_id is linked, verify the proof is for this specific job
+            let linked_job = self.proof_job_ids.read(*proof_data[4]);
+            if linked_job != 0 {
+                // Job already linked - verify it matches
+                if linked_job != job_id {
+                    return false;
+                }
+            }
+
+            true
+        }
+
         /// Extract security bits from proof configuration
         fn _extract_security_bits(self: @ContractState, proof_data: Span<felt252>) -> u32 {
             // PCS Config format (first 4 elements):

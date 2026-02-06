@@ -37,7 +37,7 @@ pub trait IWorkerAccount<TContractState> {
     fn increment_jobs_completed(ref self: TContractState);
 }
 
-#[derive(Copy, Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde)]
 pub struct Call {
     pub to: ContractAddress,
     pub selector: felt252,
@@ -149,14 +149,14 @@ pub mod WorkerAccount {
             let signature = tx_info.signature;
 
             // Check if signature is from owner or valid session key
-            if self._is_valid_owner_signature(tx_hash, signature.snapshot) {
+            if self._is_valid_owner_signature(tx_hash, signature) {
                 return VALIDATED;
             }
 
             // Check session key signature
             if signature.len() >= 2 {
-                let session_key = *signature.at(0);
-                if self._is_valid_session_signature(tx_hash, signature.snapshot, @calls) {
+                let _session_key = *signature.at(0);
+                if self._is_valid_session_signature(tx_hash, signature, @calls) {
                     return VALIDATED;
                 }
             }

@@ -34,5 +34,8 @@ pub mod confidential_transfer;
 // Fully Homomorphic Encryption (FHE) verification
 pub mod fhe_verifier;
 
+// Shielded Swap Router — Private token swaps via Ekubo AMM (ILocker pattern)
+pub mod shielded_swap_router;
+
 // Stealth Address Registry (TODO: fix stealth_payments dependency)
 // pub mod stealth_registry;

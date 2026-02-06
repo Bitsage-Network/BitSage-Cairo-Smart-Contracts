@@ -170,6 +170,9 @@ pub trait IPaymentRouter<TContractState> {
     /// Admin: Set staker rewards pool address
     fn set_staker_rewards_pool(ref self: TContractState, pool: ContractAddress);
 
+    /// Admin: Set authorized proof submitter (coordinator address that can call register_job)
+    fn set_authorized_submitter(ref self: TContractState, submitter: ContractAddress);
+
     /// Register job with worker (called by JobManager)
     /// @param job_id: Job identifier
     /// @param worker: GPU provider address
@@ -283,6 +286,9 @@ mod PaymentRouter {
         // Configuration state - production-grade initialization pattern
         configured: bool,   // True once configure() is called
         finalized: bool,    // True once finalize() is called - locks forever
+
+        // Authorized proof submitter (coordinator/deployer that can call register_job)
+        authorized_submitter: ContractAddress,
 
         // Job-to-worker mapping (set by JobManager)
         job_worker: Map<u256, ContractAddress>,
@@ -471,8 +477,8 @@ mod PaymentRouter {
 
         self.quote_counter.write(0);
 
-        // Initialize upgrade delay: 2 days (172800 seconds)
-        self.upgrade_delay.write(172800);
+        // Initialize upgrade delay: 5 minutes (300 seconds) - testnet friendly
+        self.upgrade_delay.write(300);
 
         // Configuration state
         self.configured.write(false);
@@ -799,15 +805,23 @@ mod PaymentRouter {
             self.staker_rewards_pool.write(pool);
         }
 
+        fn set_authorized_submitter(ref self: ContractState, submitter: ContractAddress) {
+            self._only_owner();
+            self.authorized_submitter.write(submitter);
+        }
+
         fn register_job(
             ref self: ContractState,
             job_id: u256,
             worker: ContractAddress,
             privacy_enabled: bool
         ) {
-            // In production: verify caller is authorized JobManager
-            // For now, allow owner to register jobs
-            self._only_owner();
+            // Allow owner OR authorized submitter (coordinator/deployer)
+            let caller = get_caller_address();
+            let is_owner = caller == self.owner.read();
+            let submitter = self.authorized_submitter.read();
+            let is_submitter = !submitter.is_zero() && caller == submitter;
+            assert(is_owner || is_submitter, 'Not authorized');
 
             self.job_worker.write(job_id, worker);
             self.job_privacy_enabled.write(job_id, privacy_enabled);
@@ -928,8 +942,8 @@ mod PaymentRouter {
             // Only owner can change delay
             self._only_owner();
 
-            // Minimum delay: 1 day (86400 seconds)
-            assert!(delay >= 86400, "Delay must be at least 1 day");
+            // Minimum delay: 5 minutes (300 seconds) - testnet friendly
+            assert!(delay >= 300, "Delay must be at least 5 minutes");
 
             // Maximum delay: 30 days
             assert!(delay <= 2592000, "Delay must be at most 30 days");
