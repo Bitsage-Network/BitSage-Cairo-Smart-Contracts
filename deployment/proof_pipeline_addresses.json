@@ -1,0 +1,31 @@
+{
+  "network": "sepolia",
+  "deployer": "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
+  "timestamp": "2026-01-31T06:39:04.312Z",
+  "contracts": {
+    "StwoVerifier": {
+      "class_hash": "0x33cad8dfa7979ec154b0086587dfd485c57df94f2d2f8ee95cb03921123317c",
+      "address": "0x2c7fd025e5c3652ae46d2fcd5f4b83aa8001160f1920c32535e29d14dc18c6e"
+    },
+    "ProofGatedPayment": {
+      "class_hash": "0x1defa6ad97c00bdeb32a5f32262a736dd77b843c9fd089e8fdcf587401df0aa",
+      "address": "0x1ea5ee7311c2f498232c19f1296d025e355eb9f4ce786c8ebdb1228fcd73194"
+    },
+    "OptimisticTEE": {
+      "class_hash": "0x1d5555d16c93614373f4a0c924ae6994320a2a031f444a6d2404b51958319be",
+      "address": "0x15254251ece80bcdba0be2b2d8956c116866b4fc34f42263b61bf409b6681b9"
+    },
+    "ProverStaking": {
+      "class_hash": "0x5b5e162892d3eaca1b365ae52b410c444d3dc319c2724cf7c309e1592acb9c1",
+      "address": "0x342c77730637af3827840fc30d2094f87809b5aac0a8d75a7793df57c84e835"
+    },
+    "FeeManager": {
+      "class_hash": "0x2ea7e8e19082b1a0801f1b1e1ed086b31355c436f4e79c805b88a5d085d182d",
+      "address": "0x2dd21bf676da2b1e553f7bfcbce6852d15c629ce36bee72e21a3638dc8bc750"
+    }
+  },
+  "existing": {
+    "sage_token": "0x04321b7282ae6aa354988eed57f2ff851314af8524de8b1f681a128003cc4ea5",
+    "payment_router": "0x3a3d409738734ae42365a20ae217687991cbba9db743c30d87f6a6dbaf523c6"
+  }
+}

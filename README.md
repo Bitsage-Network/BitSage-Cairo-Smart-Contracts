@@ -12,7 +12,7 @@
   <a href="#architecture">Architecture</a> •
   <a href="#economics">Economics</a> •
   <a href="#contracts">Contracts</a> •
-  <a href="#privacy">Privacy</a> •
+  <a href="#true-proof">Proof of Computation</a> •
   <a href="#quickstart">Quick Start</a> •
   <a href="#deployment">Deployment</a>
 </p>
@@ -563,6 +563,56 @@ enum AssetId { SAGE, USDC, STRK, ETH, BTC, Custom(felt252) }
 - Commitment aggregation
 ```
 </details>
+
+---
+
+<h2 id="true-proof">🔐 True Proof of Computation</h2>
+
+BitSage implements **cryptographically verified proof of computation** - proofs are bound to specific inputs/outputs, preventing reuse attacks and ensuring payment only releases after verification.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  1. Client submits job with inputs                                          │
+│  2. Worker executes in ObelyskVM → outputs                                  │
+│  3. Worker computes: io_commitment = H(inputs || outputs)                   │
+│  4. STWO GPU Prover generates proof with io_commitment at proof[4]          │
+│  5. Worker submits: submit_and_verify_with_io_binding(proof, expected_io)   │
+│  6. Verifier checks: proof[4] == expected_io_hash ✓                         │
+│  7. Payment released via ProofGatedPayment callback                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Security Guarantees
+
+| Attack | Prevention |
+|--------|------------|
+| Proof reuse | IO commitment unique per job |
+| Output tampering | Proof contains H(actual_outputs) |
+| Payment without work | No valid proof = no payment |
+
+### GPU Operator Quick Start
+
+```bash
+# Generate proof with IO binding
+cargo run --release --features gpu -- \
+  generate-proof --job-id "job_123" --inputs "[1,2,3,4,5]"
+
+# Submit to Starknet
+starkli invoke $VERIFIER submit_and_verify_with_io_binding \
+  <proof_data> <expected_io_hash> <job_id>
+```
+
+### Verified Proofs on Sepolia
+
+10 proofs submitted and verified:
+- [Proof 1](https://sepolia.voyager.online/tx/0x02396b88be8e2e46ad67005577ff23796ca3ddcd9af431b58dcf9f7556cc82d5)
+- [Proof 2](https://sepolia.voyager.online/tx/0x0568b4678fbd84eecf46ab3cf1080d9d951a21ada506695117bf3739092ce988)
+- [Proof 3](https://sepolia.voyager.online/tx/0x02d561869b62c5b7a3c2f3ec5b114cd78342e645716f81346cee60c41cf21224)
+- [All 10 proofs →](docs/TRUE_PROOF_OF_COMPUTATION.md#voyager-links-verified-proofs)
+
+📖 **[Full Documentation →](docs/TRUE_PROOF_OF_COMPUTATION.md)**
 
 ---
 

@@ -1,0 +1,15 @@
+{
+  "deployed_at": "2026-02-01T20:19:56.900Z",
+  "configuration": {
+    "ProofGatedPayment": "configured with new StwoVerifier",
+    "OptimisticTEE": "configured with ProofGatedPayment + WorkerStaking"
+  },
+  "new_deployments": {
+    "AchievementNFT": "FAILED: RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_a",
+    "ConfidentialSwapContract": "0x3199863a98dfa1b4017d62ff750ceed5612754a678a664aeaa3aee02d4d3ed5",
+    "ConfidentialTransfer": "FAILED: RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_a",
+    "FheVerifier": "0x4daefc8737a2f8f7deb5c3488a86617d8b8c52e2fcc39ba3dbcf7c8b09f7717",
+    "Paymaster": "0x3310768ef63c3b6dc1d67c6400433f5cde0c1251d00f533a8849c9ef24a6e94",
+    "WorkerAccount": "0x245c0ade594727f0cd92ab51649e1a45a42c4935038ca084fc51be2076840ea"
+  }
+}

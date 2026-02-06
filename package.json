@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "blake3": "^2.1.6",
     "starknet": "^9.2.1"
   }
 }
