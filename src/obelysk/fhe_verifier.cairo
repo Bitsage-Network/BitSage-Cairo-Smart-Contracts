@@ -9,7 +9,6 @@
 // that the computation was performed correctly.
 
 use starknet::ContractAddress;
-use core::array::ArrayTrait;
 
 // ========== Types ==========
 
@@ -44,6 +43,8 @@ pub struct FheProof {
     pub proof_data: Array<felt252>,
     /// Public inputs to the circuit
     pub public_inputs: Array<felt252>,
+    /// IO commitment binding proof to encrypted inputs/outputs
+    pub io_commitment: felt252,
 }
 
 /// FHE operation types
@@ -112,6 +113,20 @@ pub trait IFheVerifier<TContractState> {
         aggregated_proof: FheProof,
     ) -> u32;
 
+    /// Verify an FHE computation with explicit IO commitment verification
+    /// This ensures the proof is bound to specific encrypted inputs/outputs
+    fn verify_fhe_compute_with_io_binding(
+        ref self: TContractState,
+        input_commitments: Array<CiphertextCommitment>,
+        output_commitment: CiphertextCommitment,
+        operation: FheOperation,
+        proof: FheProof,
+        expected_io_commitment: felt252,
+    ) -> bool;
+
+    /// Check if an IO commitment has been verified for a given job
+    fn is_io_commitment_verified(self: @TContractState, io_commitment: felt252) -> bool;
+
     // Admin functions
     fn set_stwo_verifier(ref self: TContractState, verifier: ContractAddress);
     fn get_stwo_verifier(self: @TContractState) -> ContractAddress;
@@ -150,6 +165,10 @@ pub mod FheVerifier {
         authorized_workers: Map<ContractAddress, bool>,
         // Worker count
         worker_count: u64,
+        // Verified IO commitments: io_commitment -> verified
+        verified_io_commitments: Map<felt252, bool>,
+        // IO commitment count
+        io_commitment_count: u64,
     }
 
     // ========== Events ==========
@@ -161,6 +180,7 @@ pub mod FheVerifier {
         BatchVerified: BatchVerified,
         WorkerRegistered: WorkerRegistered,
         WorkerUnregistered: WorkerUnregistered,
+        IOCommitmentVerified: IOCommitmentVerified,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -191,6 +211,16 @@ pub mod FheVerifier {
         worker: ContractAddress,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct IOCommitmentVerified {
+        #[key]
+        io_commitment: felt252,
+        compute_id: felt252,
+        operation: felt252,
+        worker: ContractAddress,
+        timestamp: u64,
+    }
+
     // ========== Constructor ==========
 
     #[constructor]
@@ -199,6 +229,7 @@ pub mod FheVerifier {
         self.stwo_verifier.write(stwo_verifier);
         self.verified_count.write(0);
         self.worker_count.write(0);
+        self.io_commitment_count.write(0);
     }
 
     // ========== Implementation ==========
@@ -407,6 +438,94 @@ pub mod FheVerifier {
             verified
         }
 
+        fn verify_fhe_compute_with_io_binding(
+            ref self: ContractState,
+            input_commitments: Array<CiphertextCommitment>,
+            output_commitment: CiphertextCommitment,
+            operation: FheOperation,
+            proof: FheProof,
+            expected_io_commitment: felt252,
+        ) -> bool {
+            let caller = get_caller_address();
+
+            // Verify caller is authorized
+            let worker_count = self.worker_count.read();
+            if worker_count > 0 {
+                assert(self.authorized_workers.entry(caller).read(), 'Unauthorized worker');
+            }
+
+            // CRITICAL: Verify the IO commitment matches the proof's embedded commitment
+            // This ensures the proof is bound to the specific encrypted inputs/outputs
+            let io_verified = self._verify_io_commitment(@proof, expected_io_commitment);
+            assert(io_verified, 'IO commitment mismatch');
+
+            // Check IO commitment hasn't been used before (prevents replay)
+            assert(!self.verified_io_commitments.entry(expected_io_commitment).read(), 'IO commitment already used');
+
+            // Compute input hash from commitments
+            let input_hash = self._compute_input_hash(@input_commitments);
+
+            // Compute output hash
+            let output_hash = poseidon_hash_span(
+                array![output_commitment.low, output_commitment.high].span()
+            );
+
+            // Compute unique ID for this computation
+            let operation_felt: felt252 = operation.into();
+            let compute_id = poseidon_hash_span(
+                array![input_hash, output_hash, operation_felt, expected_io_commitment].span()
+            );
+
+            // Check not already verified (with this specific IO commitment)
+            assert(!self.is_computation_verified.entry(compute_id).read(), 'Already verified');
+
+            // Verify the STWO proof with IO binding
+            let proof_valid = self._verify_stwo_proof_with_io(
+                @proof, input_hash, output_hash, operation_felt, expected_io_commitment
+            );
+            assert(proof_valid, 'Invalid proof');
+
+            // Store the verified computation
+            let timestamp = get_block_timestamp();
+            let commitment = ComputeCommitment {
+                input_hash,
+                output_hash,
+                operation: operation_felt,
+                worker: caller,
+                verified_at: timestamp,
+            };
+
+            self.verified_computations.entry(compute_id).write(commitment);
+            self.is_computation_verified.entry(compute_id).write(true);
+            self.verified_count.write(self.verified_count.read() + 1);
+
+            // Mark IO commitment as used
+            self.verified_io_commitments.entry(expected_io_commitment).write(true);
+            self.io_commitment_count.write(self.io_commitment_count.read() + 1);
+
+            // Emit events
+            self.emit(ComputationVerified {
+                compute_id,
+                operation: operation_felt,
+                worker: caller,
+                timestamp,
+            });
+
+            self.emit(IOCommitmentVerified {
+                io_commitment: expected_io_commitment,
+                compute_id,
+                operation: operation_felt,
+                worker: caller,
+                timestamp,
+            });
+
+            true
+        }
+
+        fn is_io_commitment_verified(self: @ContractState, io_commitment: felt252) -> bool {
+            self.verified_io_commitments.entry(io_commitment).read()
+        }
+
         fn set_stwo_verifier(ref self: ContractState, verifier: ContractAddress) {
             self._only_owner();
             self.stwo_verifier.write(verifier);
@@ -500,6 +619,85 @@ pub mod FheVerifier {
                 return false;
             }
 
+            proof.proof_data.len() > 0
+        }
+
+        /// Verify the IO commitment embedded in the proof matches expected
+        ///
+        /// This is CRITICAL for ensuring proofs cannot be reused with different
+        /// encrypted inputs/outputs. The IO commitment H(inputs || outputs || metadata)
+        /// must match what the worker computed.
+        fn _verify_io_commitment(
+            self: @ContractState,
+            proof: @FheProof,
+            expected_io_commitment: felt252,
+        ) -> bool {
+            // The IO commitment should be embedded in the proof
+            let proof_io_commitment = *proof.io_commitment;
+
+            // Allow zero expected commitment to skip IO verification (for backwards compatibility)
+            if expected_io_commitment == 0 {
+                return true;
+            }
+
+            // Verify the proof's IO commitment matches expected
+            if proof_io_commitment != expected_io_commitment {
+                return false;
+            }
+
+            // Verify the IO commitment is non-zero (prevents trivial proofs)
+            if proof_io_commitment == 0 {
+                return false;
+            }
+
+            true
+        }
+
+        /// Verify STWO proof with IO binding
+        ///
+        /// This extends the standard proof verification to also verify:
+        /// 1. Input/output hashes match public inputs
+        /// 2. Operation type matches
+        /// 3. IO commitment is correctly embedded and matches
+        fn _verify_stwo_proof_with_io(
+            self: @ContractState,
+            proof: @FheProof,
+            input_hash: felt252,
+            output_hash: felt252,
+            operation: felt252,
+            io_commitment: felt252,
+        ) -> bool {
+            // Verify public inputs match
+            let public_inputs = proof.public_inputs;
+            if public_inputs.len() < 4 {
+                return false;
+            }
+
+            // Public inputs format: [input_hash, output_hash, operation, io_commitment]
+            if *public_inputs.at(0) != input_hash {
+                return false;
+            }
+            if *public_inputs.at(1) != output_hash {
+                return false;
+            }
+            if *public_inputs.at(2) != operation {
+                return false;
+            }
+            if *public_inputs.at(3) != io_commitment {
+                return false;
+            }
+
+            // Verify proof commitment is non-zero
+            if *proof.proof_commitment == 0 {
+                return false;
+            }
+
+            // Verify IO commitment in proof matches expected
+            if *proof.io_commitment != io_commitment {
+                return false;
+            }
+
+            // In production, call the STWO verifier contract here
             proof.proof_data.len() > 0
         }
     }
