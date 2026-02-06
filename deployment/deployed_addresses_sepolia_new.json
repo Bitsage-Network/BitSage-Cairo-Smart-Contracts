@@ -2,14 +2,11 @@
   "network": "sepolia",
   "rpc_url": "https://api.cartridge.gg/x/starknet/sepolia",
   "deployer": "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
-  "deployed_at": "2025-12-31T05:18:52.649Z",
+  "deployed_at": "2025-12-31T15:30:22.000Z",
   "contracts": {
     "SAGEToken": {
       "address": "0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850",
       "note": "Previously deployed with correct owner"
-    },
-    "ReputationManager": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x5\",\n        \"0xb0a1e5d58af4cc3cc263971863a7d21b920328ae3cc2266394e866093369fb\",\n        \"0x1510228e743ea46c5090602438820d1186c5ce37179a161205365af2bb51455\",\n        \"0x1\",\n        \"0x1\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x32\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x5f5e100\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x44f75c6797356cb4717142979d3a03a73695b96781f011c180cdb238fa6ddb, Class hash= 0xb0a1e5d58af4cc3cc263971863a7d21b920328ae3cc2266394e866093369fb, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x44f75c6797356cb4717142979d3a03a73695b96781f011c180cdb238fa6ddb, Class hash= 0xb0a1e5d58af4cc3cc263971863a7d21b920328ae3cc2266394e866093369fb, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x4661696c656420746f20646573657269616c697a6520706172616d202332 ('Failed to deserialize param #2')\"}"
     },
     "AddressRegistry": {
       "class_hash": "0x4a3b393585a68003d36dad8bca86f03543fe0759174d593eae2a58f0097d995",
@@ -36,7 +33,8 @@
       "address": "0x17ada59ab642b53e6620ef2026f21eb3f2d1a338d6e85cb61d5bcd8dfbebc8b"
     },
     "StwoVerifier": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x5\",\n        \"0x1c774714a6f0ce2fa272651184e72e4ea451f43f44797497b93495eeb287582\",\n        \"0x46f66b3f6de09788cd9f481effb82eccbca86a49e072e727ad4e396ae5e3aef\",\n        \"0x1\",\n        \"0x1\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x38\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x0\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x1810031942f922911aac82369d091215f2d86e2f2a6e69a75bf1e3743a59501, Class hash= 0x1c774714a6f0ce2fa272651184e72e4ea451f43f44797497b93495eeb287582, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x1810031942f922911aac82369d091215f2d86e2f2a6e69a75bf1e3743a59501, Class hash= 0x1c774714a6f0ce2fa272651184e72e4ea451f43f44797497b93495eeb287582, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x4661696c656420746f20646573657269616c697a6520706172616d202332 ('Failed to deserialize param #2')\"}"
+      "class_hash": "0x1c774714a6f0ce2fa272651184e72e4ea451f43f44797497b93495eeb287582",
+      "address": "0x52963fe2f1d2d2545cbe18b8230b739c8861ae726dc7b6f0202cc17a369bd7d"
     },
     "FraudProof": {
       "class_hash": "0x7ed4704f130ec97247e747f3b53b12823723a6e9d84f373f1c6b3e6e06b6825",
@@ -46,6 +44,10 @@
       "class_hash": "0x32cf50d9e8e7c6a1055e9c1b9049fb9b6430fcde1c5d84e2c032e141b6e85bc",
       "address": "0x4238502196d7dab552e2af5d15219c8227c9f4dc69f0df1fa2ca9f8cb29eb33"
     },
+    "ObelyskProverRegistry": {
+      "class_hash": "0xf86a5638764fde2468024da5bf79a598a3a1fa89b8c717f51fe029e2472608",
+      "address": "0x34a02ecafacfa81be6d23ad5b5e061e92c2b8884cfb388f95b57122a492b3e9"
+    },
     "Escrow": {
       "class_hash": "0x5092e74d33da3d039913db6803b1fdc69ca1ace49ea39b5c74e6d81e49e1cae",
       "address": "0x7d7b5aa04b8eec7676568c8b55acd5682b8f7cb051f69c1876f0e5a6d8edfd4"
@@ -54,47 +56,27 @@
       "class_hash": "0x3be2105f422eb147b90f14010dff9f36e412315c9b7d39e7f1ae685a13dcf6a",
       "address": "0x74344374490948307360e6a8376d656190773115a4fca4d049366cea7edde39"
     },
-    "MeteredBilling": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x7\",\n        \"0x3aab9a728a201c3cc222166549c02fd5088e373e103764cf842180c5ec83d3b\",\n        \"0x39dfe0cdbcd434978d0ad82532ebc0d710cbb53cee17a55493468ffbcced011\",\n        \"0x1\",\n        \"0x3\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n        \"0x72349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850\",\n        \"0x74344374490948307360e6a8376d656190773115a4fca4d049366cea7edde39\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x3c\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x0\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x1a0069823682785ab337b3d09f749ad2315bfea82b3abdcce2cd58133c3d947, Class hash= 0x3aab9a728a201c3cc222166549c02fd5088e373e103764cf842180c5ec83d3b, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x1a0069823682785ab337b3d09f749ad2315bfea82b3abdcce2cd58133c3d947, Class hash= 0x3aab9a728a201c3cc222166549c02fd5088e373e103764cf842180c5ec83d3b, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x496e70757420746f6f206c6f6e6720666f7220617267756d656e7473 ('Input too long for arguments')\"}"
-    },
-    "ProofGatedPayment": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x7\",\n        \"0x51eaa40c05925a1f42c20ee0a58f7f5470d5e3471f7b0581b7f67bb7e020e2f\",\n        \"0x40fb9eabd84f8a20c7991c3f17b90eebbd64f22458ba765a1ceee18674d093e\",\n        \"0x1\",\n        \"0x3\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n        \"0x72349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850\",\n        \"0x17ada59ab642b53e6620ef2026f21eb3f2d1a338d6e85cb61d5bcd8dfbebc8b\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x3c\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x0\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x3daa16ddc6c83eb845ad6aaee72211b76a93c3c38c891c60c530b92fc5366d3, Class hash= 0x51eaa40c05925a1f42c20ee0a58f7f5470d5e3471f7b0581b7f67bb7e020e2f, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x3daa16ddc6c83eb845ad6aaee72211b76a93c3c38c891c60c530b92fc5366d3, Class hash= 0x51eaa40c05925a1f42c20ee0a58f7f5470d5e3471f7b0581b7f67bb7e020e2f, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x496e70757420746f6f206c6f6e6720666f7220617267756d656e7473 ('Input too long for arguments')\"}"
-    },
     "DynamicPricing": {
       "class_hash": "0x26a14a47a2bbc3ae44ccb7bb8fd92159943a031ea5bf444e5299b44174c5d7b",
       "address": "0x28881df510544345d29e12701b6b6366441219364849a43d3443f37583bc0df"
     },
-    "CDCPool": {
-      "error": "undefined can't be computed by felt()"
+    "MeteredBilling": {
+      "class_hash": "0x3aab9a728a201c3cc222166549c02fd5088e373e103764cf842180c5ec83d3b",
+      "address": "0x1adb19d21f28f56ae9a8852d19f2e2af728764846d30002da8782d571ae01b2"
+    },
+    "ProofGatedPayment": {
+      "class_hash": "0x51eaa40c05925a1f42c20ee0a58f7f5470d5e3471f7b0581b7f67bb7e020e2f",
+      "address": "0x7e74d191b1cca7cac00adc03bc64eaa6236b81001f50c61d1d70ec4bfde8af0"
     },
     "OracleWrapper": {
-      "error": "fetch failed"
+      "class_hash": "0x1fe70f6d0115e3c7fad686ac22b4e1f741953c1c0828ee1c7f2487e61867314",
+      "address": "0x4d86bb472cb462a45d68a705a798b5e419359a5758d84b24af4bbe5441b6e5a"
     },
     "PaymentRouter": {
-      "error": "undefined can't be computed by felt()"
+      "address": "0x6a0639e673febf90b6a6e7d3743c81f96b39a3037b60429d479c62c5d20d41"
     },
-    "JobManager": {
-      "error": "undefined can't be computed by felt()"
-    },
-    "PrivacyRouter": {
-      "error": "undefined can't be computed by felt()"
-    },
-    "WorkerPrivacyHelper": {
-      "error": "undefined can't be computed by felt()"
-    },
-    "PrivacyPools": {
-      "error": "undefined can't be computed by felt()"
-    },
-    "MixingRouter": {
-      "class_hash": "0x4405d9b074a9d489b374662b90d3d76b6300e46a57c96000f3af8e512f5b477",
-      "address": "0x4a4e05233271f5203791321f2ba92b2de73ad051f788e7b605f204b5a43b8d1"
-    },
-    "SteganographicRouter": {
-      "class_hash": "0x648d2ef0ade1b3366321fa1890af95383e15811803e529b2fa5c37061dff349",
-      "address": "0x47ab97833df3f77d807a4699ca0f0245d533a4d9e0664f809a04cee3ec720dc"
-    },
-    "ConfidentialSwapContract": {
-      "error": "fetch failed"
+    "BurnManager": {
+      "address": "0x69eb2419e6eee4ed8a9031f2371f0d9682b91f7c5fb6e0823c48b6c725d6a4"
     },
     "OTCOrderbook": {
       "class_hash": "0x164412038d9120dad5d3bc8b100d1b3293d9f6ac9f4f0263a7f8a05af49c024",
@@ -108,40 +90,67 @@
       "class_hash": "0x6165a981f4f0f91c256309a886fcbacac456bc2fd4ac8f90c238ce50f26f41f",
       "address": "0x3beb685db6a20804ee0939948cee05c42de655b6b78a93e1e773447ce981cde"
     },
-    "TreasuryTimelock": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x6\",\n        \"0x3aff3ddc2cfa7f87baa096ca1d11c7ad4d1cbf4880043096ea0293b430d56e\",\n        \"0x399a565bd5a20e99a9e48e9a7ff174b12e638b59cc6d14e698bfed807f892c8\",\n        \"0x1\",\n        \"0x2\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n        \"0x15180\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x49\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x0\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x6d207162c118e394e76c94a36c6f12dd9be73bf5b96d23f10550648c615a922, Class hash= 0x3aff3ddc2cfa7f87baa096ca1d11c7ad4d1cbf4880043096ea0293b430d56e, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x6d207162c118e394e76c94a36c6f12dd9be73bf5b96d23f10550648c615a922, Class hash= 0x3aff3ddc2cfa7f87baa096ca1d11c7ad4d1cbf4880043096ea0293b430d56e, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x4661696c656420746f20646573657269616c697a6520706172616d202331 ('Failed to deserialize param #1')\"}"
+    "ReputationManager": {
+      "class_hash": "0xb0a1e5d58af4cc3cc263971863a7d21b920328ae3cc2266394e866093369fb",
+      "address": "0x7832ea4d7f6a429da17b58f74faa611a8a5301cdf371cfa9a5ac520fb6d8f55"
     },
-    "GovernanceTreasury": {
-      "error": "undefined can't be computed by felt()"
+    "MixingRouter": {
+      "class_hash": "0x4405d9b074a9d489b374662b90d3d76b6300e46a57c96000f3af8e512f5b477",
+      "address": "0x4a4e05233271f5203791321f2ba92b2de73ad051f788e7b605f204b5a43b8d1"
     },
-    "BurnManager": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x6\",\n        \"0x3b866ef0667df596c2982985fbc5a169ab3be0e24cd086f72705b1d949b9acd\",\n        \"0x5e8347623e02b0be29f1d99981db99c27b44b88a6e05ab01091d66026136739\",\n        \"0x1\",\n        \"0x2\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n        \"0x72349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x4b\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x0\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x392ffbec1452fc982732c465b64dca896bac4fb74a2f210a41123588edf68d8, Class hash= 0x3b866ef0667df596c2982985fbc5a169ab3be0e24cd086f72705b1d949b9acd, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x392ffbec1452fc982732c465b64dca896bac4fb74a2f210a41123588edf68d8, Class hash= 0x3b866ef0667df596c2982985fbc5a169ab3be0e24cd086f72705b1d949b9acd, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x4661696c656420746f20646573657269616c697a6520706172616d202333 ('Failed to deserialize param #3')\"}"
+    "SteganographicRouter": {
+      "class_hash": "0x648d2ef0ade1b3366321fa1890af95383e15811803e529b2fa5c37061dff349",
+      "address": "0x47ab97833df3f77d807a4699ca0f0245d533a4d9e0664f809a04cee3ec720dc"
     },
-    "LinearVestingWithCliff": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x6\",\n        \"0x3132504e9cc1d84f6f27e5376491ce9fc659f2e3874c9cd5addd480acb9670c\",\n        \"0x1d86e7c20c539e65eb035672d0d048e6eba1f72a0b106e9b275e01e1142f623\",\n        \"0x1\",\n        \"0x2\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n        \"0x72349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x4c\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x5f5e100\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x24677c7e9dfb2ac0d2e285ec886ad80799bc55733354d350396e35e620b5add, Class hash= 0x3132504e9cc1d84f6f27e5376491ce9fc659f2e3874c9cd5addd480acb9670c, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x24677c7e9dfb2ac0d2e285ec886ad80799bc55733354d350396e35e620b5add, Class hash= 0x3132504e9cc1d84f6f27e5376491ce9fc659f2e3874c9cd5addd480acb9670c, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x4661696c656420746f20646573657269616c697a6520706172616d202333 ('Failed to deserialize param #3')\"}"
+    "ConfidentialSwap": {
+      "class_hash": "0x3b148c460c8bac9b1fdf8339fb7a8f0472e9406d8f58cb8a74225b6b9fa8bd9",
+      "address": "0x29516b3abfbc56fdf0c1f136c971602325cbabf07ad8f984da582e2106ad2af"
     },
-    "MilestoneVesting": {
-      "error": "RPC: starknet_estimateFee with params {\n  \"request\": [\n    {\n      \"type\": \"INVOKE\",\n      \"sender_address\": \"0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n      \"calldata\": [\n        \"0x1\",\n        \"0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125\",\n        \"0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8\",\n        \"0x6\",\n        \"0x6d8de1e9f2e3fcb06c7c05b43dadc62ee50cd57915f8d1b20f5696f26c74b27\",\n        \"0x419a436d71912a1c08bb59883a32ebaac3a93e6f813b7ca60d4b343fd4c99ca\",\n        \"0x1\",\n        \"0x2\",\n        \"0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344\",\n        \"0x72349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850\"\n      ],\n      \"signature\": [],\n      \"nonce\": \"0x4d\",\n      \"resource_bounds\": {\n        \"l2_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        },\n        \"l1_data_gas\": {\n          \"max_amount\": \"0x0\",\n          \"max_price_per_unit\": \"0x0\"\n        }\n      },\n      \"tip\": \"0x5f5e100\",\n      \"paymaster_data\": [],\n      \"nonce_data_availability_mode\": \"L1\",\n      \"fee_data_availability_mode\": \"L1\",\n      \"account_deployment_data\": [],\n      \"version\": \"0x100000000000000000000000000000003\"\n    }\n  ],\n  \"block_id\": \"latest\",\n  \"simulation_flags\": [\n    \"SKIP_VALIDATE\"\n  ]\n}\n\n      41: Transaction execution error: {\"transaction_index\":0,\"execution_error\":\"Contract address= 0x759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344, Class hash= 0x5b4b537eaa2399e3aa99c4e2e0208ebd6c71bc1467938cd52c798c601e43564, Selector= 0x15d40a3d6ca2ac30f4031e42be28da9b056fef9bb7357ac5e85627ee876e5ad, Nested error: Contract address= 0x2ceed65a4bd731034c01113685c831b01c15d7d432f71afb1cf1634b53a2125, Class hash= 0x1b2df6d8861670d4a8ca4670433b2418d78169c2947f46dc614e69f333745c8, Selector= 0x2730079d734ee55315f4f141eaed376bddd8c2133523d223a344c5604e0f7f8, Nested error: Contract address= 0x3db67c6cedd9fc9411d82fd516f634daa87c585b700df6cd9a52d3350bb820a, Class hash= 0x6d8de1e9f2e3fcb06c7c05b43dadc62ee50cd57915f8d1b20f5696f26c74b27, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: Contract address= 0x3db67c6cedd9fc9411d82fd516f634daa87c585b700df6cd9a52d3350bb820a, Class hash= 0x6d8de1e9f2e3fcb06c7c05b43dadc62ee50cd57915f8d1b20f5696f26c74b27, Selector= 0x28ffe4ff0f226a9107253e17a904099aa4f63a02a5621de0576e5aa71bc5194, Nested error: 0x4661696c656420746f20646573657269616c697a6520706172616d202333 ('Failed to deserialize param #3')\"}"
+    "PrivacyPools": {
+      "address": "0xd85ad03dcd91a075bef0f4226149cb7e43da795d2c1d33e3227c68bfbb78a7"
+    },
+    "WorkerPrivacyHelper": {
+      "address": "0x1ce38bdbf4b036a31f9313282783b1d1f19cc3942512029e17bb817a87953c"
+    },
+    "PrivacyRouter": {
+      "address": "0x7d1a6c242a4f0573696e117790f431fd60518a000b85fe5ee507456049ffc53"
     },
     "RewardVesting": {
       "class_hash": "0x1cb4b706ed05e937dafbb983e85f596dd6832171adb277f6350c17daf061959",
       "address": "0x52e086edb779dbe2a9bb2989be63e8847a791cb1628ad5b81e73d6c6f448016"
     },
+    "LinearVestingWithCliff": {
+      "address": "0xc0e5f7a55aca4656f3cc76c7e9db0982ada98cd52a71c2062335b3cdc89d35"
+    },
+    "MilestoneVesting": {
+      "address": "0xdfd25e74636e4000c6410dc097b008461989b66322cbeb703159e5a99ba16a"
+    },
+    "TreasuryTimelock": {
+      "class_hash": "0x3aff3ddc2cfa7f87baa096ca1d11c7ad4d1cbf4880043096ea0293b430d56e",
+      "address": "0x4cc9603d7e72469de22aa84d9ac20ddcbaa7309d7eb091f75cd7f7a9e087947"
+    },
+    "GovernanceTreasury": {
+      "address": "0xdf4c3ced8c8eafe33532965fe29081e6f94fb7d54bc976721985c647a7ef92"
+    },
+    "CDCPool": {
+      "address": "0x1f978cad424f87a6cea8aa27cbcbba10b9a50d41e296ae07e1c635392a2339"
+    },
+    "JobManager": {
+      "address": "0x355b8c5e9dd3310a3c361559b53cfcfdc20b2bf7d5bd87a84a83389b8cbb8d3"
+    },
     "Faucet": {
       "class_hash": "0x502015b2d24dc7729b11e1dd50e8baef906683bb1376e981d5006305eea3d9",
       "address": "0x62d3231450645503345e2e022b60a96aceff73898d26668f3389547a61471d3"
-    },
-    "ObelyskProverRegistry": {
-      "class_hash": "0xf86a5638764fde2468024da5bf79a598a3a1fa89b8c717f51fe029e2472608",
-      "address": "0x34a02ecafacfa81be6d23ad5b5e061e92c2b8884cfb388f95b57122a492b3e9"
     }
   },
   "notes": [
-    "Deployment completed on 2025-12-31T05:39:34.170Z",
-    "Deployed 20 contracts successfully",
-    "Failed: 17 contracts",
-    "All contracts owned by deployer: 0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
-    "SAGEToken at: 0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850"
+    "ALL 37 CONTRACTS DEPLOYED SUCCESSFULLY on Starknet Sepolia",
+    "Initial deployment: 2025-12-30 (20 contracts)",
+    "Redeployment of 7 failed contracts: 2025-12-31 (StwoVerifier, MeteredBilling, ProofGatedPayment, OracleWrapper, TreasuryTimelock, ReputationManager, ConfidentialSwap)",
+    "Final 7 contracts with constructor fixes: 2025-12-31 (LinearVestingWithCliff, MilestoneVesting, CDCPool, GovernanceTreasury, BurnManager, PaymentRouter, PrivacyRouter)",
+    "Final 3 contracts: 2025-12-31 (CDCPool, JobManager, PrivacyRouter)",
+    "Privacy contracts redeployed: WorkerPrivacyHelper, PrivacyPools",
+    "All contracts owned by deployer: 0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344"
   ],
   "explorer": {
     "base_url": "https://sepolia.starkscan.co",

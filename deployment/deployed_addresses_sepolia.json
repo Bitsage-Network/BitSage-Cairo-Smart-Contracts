@@ -21,8 +21,8 @@
       "address": "0x012c8ab3fad97954eafbf99ab9d76a9c8e85dd0f6b38139d12d3c5e3f14f950b"
     },
     "PaymentRouter": {
-      "class_hash": "0x06e09c30f3b49c9bf3da9854976d376f1cf744641ef85b6a2c8b3ef135fd6efb",
-      "address": "0x006bfcc028c9976c18f8e22c2472df36d8d7848e7b55b814a5f15d339b97e1fe"
+      "class_hash": "0x674ea747315744f0e1a8e69ee015734fde61304513767a02df4a71a195ee69",
+      "address": "0x3a3d409738734ae42365a20ae217687991cbba9db743c30d87f6a6dbaf523c6"
     },
     "Faucet": {
       "class_hash": "0x05f8a16c9f2737faca0af8e3cb3a6073af6fba423de84a9eb896fed0ece04375",

@@ -1,0 +1,18 @@
+{
+  "deployed_at": "2026-02-01T19:56:00.000Z",
+  "note": "All 10 previously-failed contracts redeployed + StwoVerifier redeployed with correct constructor",
+  "redeployed": {
+    "StwoVerifier": "0x575968af96f814da648442daf1b8a09d43b650c06986e17b2bab7719418ddfb",
+    "PrivacyPools": "0x9c2629f3083c383eba6c696723f1d3a205bb31fcafc1cda814a4a5d37c0641",
+    "LinearVestingWithCliff": "0x6924c15c317eed95f24b1e28b8b58681edb07103c2a594a8926f209f6adf307",
+    "MilestoneVesting": "0x30da77b2ddec40b6fa2dbb9df56856ea9d5a5d024b9e30cfa2611c9d19209b4",
+    "CDCPool": "0x353a664033c44fb87c1b2f9d13f47e1b6b66fa96d3bcd80a72922bc18d8f742",
+    "BurnManager": "0x4123b0133f1dcae5058e084ce2ee25f6ee9391841d7b2abea9bc7fc8776001",
+    "PaymentRouter": "0x61201a811c634c7dbde16ece2612a6467ff4ba527d2501b4486acb705ba69b4",
+    "GovernanceTreasury": "0x713d23bed67be9d0b32e979c737d9e9f6d1fcd29de0b50770a39187e67ca80f",
+    "PrivacyRouter": "0x583253ca70bb02d50e60f28672ca58be294789b4b77ecd5c154b84de1a0cf60",
+    "WorkerPrivacyHelper": "0x46ca507dcab37c4e6d957e2636522281e1fa1284f9fd681ff8855dfb759ebf4",
+    "JobManager": "0x2187064d27b71c0ed51cdef77bd00f49b0db4820171474787d7978f8ffdbc46"
+  },
+  "failed": []
+}

@@ -2,6 +2,12 @@
 version = 1
 
 [[package]]
+name = "integrity"
+version = "2.1.0"
+source = "registry+https://scarbs.xyz/"
+checksum = "sha256:31eb462462e7176e42b2fe14272bf221d2655a0708299105ca64d0b99bd59b3e"
+
+[[package]]
 name = "openzeppelin"
 version = "0.20.0"
 source = "git+https://github.com/OpenZeppelin/cairo-contracts?tag=v0.20.0#7756fd1de2b4ebd239fa6e372d75535cea02e5e5"
@@ -111,6 +117,7 @@ source = "git+https://github.com/OpenZeppelin/cairo-contracts?tag=v0.20.0#7756fd
 name = "sage_contracts"
 version = "0.1.0"
 dependencies = [
+ "integrity",
  "openzeppelin",
  "snforge_std",
 ]
