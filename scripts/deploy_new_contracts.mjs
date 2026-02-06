@@ -20,7 +20,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = {
   rpcUrl: "https://rpc.starknet-testnet.lava.build",
   deployerAddress: "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
-  deployerPrivateKey: "0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a",
+  deployerPrivateKey: process.env.DEPLOYER_PRIVATE_KEY,
   // Auditor public key for ConfidentialTransfer
   auditorPublicKey: {
     x: "0x1ef15c18599971b7beced415a40f0c7deacfd9b0d1819e03d723d8bc943cfca",

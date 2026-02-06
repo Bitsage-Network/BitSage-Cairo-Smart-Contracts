@@ -7,7 +7,7 @@ import { RpcProvider, Account, hash, ETransactionVersion } from 'starknet';
 import fs from 'fs';
 
 const DEPLOYER_ADDRESS = '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344';
-const DEPLOYER_PK = '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a';
+const DEPLOYER_PK = process.env.DEPLOYER_PRIVATE_KEY;
 
 // Endpoints to try - including sequencer-style endpoints
 const ENDPOINTS = [
@@ -37,7 +37,7 @@ async function tryDeclare() {
   console.log('Checking if already declared...');
   try {
     const checkProvider = new RpcProvider({
-      nodeUrl: 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_7/GUBwFqKhSgn4mwVbN6Sbn'
+      nodeUrl: 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_7/${process.env.ALCHEMY_API_KEY}'
     });
     await checkProvider.getClassByHash(classHash);
     console.log('SUCCESS: Class already declared!');

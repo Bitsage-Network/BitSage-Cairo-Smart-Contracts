@@ -10,12 +10,12 @@ import { Account, RpcProvider, json, CallData, hash } from 'starknet';
 import fs from 'fs';
 
 const DEPLOYER_ADDRESS = '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344';
-const DEPLOYER_PRIVATE_KEY = '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a';
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 
 // RPC providers to try (in order)
 const RPC_PROVIDERS = [
   // Alchemy Core RPC v0.10 - higher limits
-  'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/GUBwFqKhSgn4mwVbN6Sbn',
+  'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/${process.env.ALCHEMY_API_KEY}',
 ];
 
 async function declareWithProvider(rpcUrl, sierra, casm) {

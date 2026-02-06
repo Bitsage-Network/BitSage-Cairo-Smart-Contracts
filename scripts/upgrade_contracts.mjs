@@ -22,9 +22,9 @@ import path from 'path';
 // Configuration
 // Using Alchemy RPC (note: SAGEToken requires higher limits due to ~5MB contract size)
 const CONFIG = {
-  rpcUrl: process.env.STARKNET_RPC_URL || 'https://starknet-sepolia.g.alchemy.com/v2/GUBwFqKhSgn4mwVbN6Sbn',
+  rpcUrl: process.env.STARKNET_RPC_URL || 'https://starknet-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}',
   deployerAddress: '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344',
-  deployerPrivateKey: '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a',
+  deployerPrivateKey: process.env.DEPLOYER_PRIVATE_KEY,
 };
 
 // Contracts to upgrade with their deployed addresses

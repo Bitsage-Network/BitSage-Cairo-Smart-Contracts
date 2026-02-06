@@ -19,7 +19,7 @@ const __dirname = path.dirname(__filename);
 // Configuration
 const JUNO_RPC = 'http://54.242.201.251:8545';
 const DEPLOYER_ADDRESS = '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344';
-const DEPLOYER_PK = '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a';
+const DEPLOYER_PK = process.env.DEPLOYER_PRIVATE_KEY;
 
 // Expected hashes
 const EXPECTED_CLASS_HASH = '0x16215c09e2b8f7df7d4977b26685b3c158e037c75bed77d549275eb8898ec7c';

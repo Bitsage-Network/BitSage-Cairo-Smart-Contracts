@@ -15,7 +15,7 @@ import * as fs from "fs";
 const CONFIG = {
   rpcUrl: "https://rpc.starknet-testnet.lava.build",
   deployerAddress: "0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344",
-  deployerPrivateKey: "0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a",
+  deployerPrivateKey: process.env.DEPLOYER_PRIVATE_KEY,
   confidentialTransferAddress: "0x626df6abac7e4c2140d8a2e2024503431a5492526adda96f78c1b623a855b",
   assets: {
     SAGE: {

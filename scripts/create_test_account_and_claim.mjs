@@ -17,7 +17,7 @@ const CONFIG = {
     rpcUrl: 'https://rpc.starknet-testnet.lava.build',
     deployer: {
         address: '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344',
-        privateKey: '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a',
+        privateKey: process.env.DEPLOYER_PRIVATE_KEY,
     },
     sageToken: '0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850',
     faucet: '0x62d3231450645503345e2e022b60a96aceff73898d26668f3389547a61471d3',

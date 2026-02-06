@@ -23,7 +23,7 @@ const CONFIG = {
     rpcUrl: 'https://api.cartridge.gg/x/starknet/sepolia',
     deployer: {
         address: '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344',
-        privateKey: '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a',
+        privateKey: process.env.DEPLOYER_PRIVATE_KEY,
     },
     strkToken: '0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d',
     usdcToken: '0x053b40a647cedfca6ca84f542a0fe36736031905a9639a7f19a3c1e66bfd5080',

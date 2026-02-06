@@ -16,7 +16,7 @@ import { Account, RpcProvider, Contract, CallData, cairo } from 'starknet';
 
 // Deployer credentials (owner of all contracts)
 const DEPLOYER_ADDRESS = process.env.DEPLOYER_ADDRESS || '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344';
-const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a';
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
 
 const CONFIG = {
     rpcUrl: 'https://rpc.starknet-testnet.lava.build',

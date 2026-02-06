@@ -9,9 +9,9 @@
 
 import { RpcProvider, Account, CallData, ETransactionVersion } from 'starknet';
 
-const RPC_URL = 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/GUBwFqKhSgn4mwVbN6Sbn';
+const RPC_URL = 'https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_10/${process.env.ALCHEMY_API_KEY}';
 const DEPLOYER_ADDRESS = '0x0759a4374389b0e3cfcc59d49310b6bc75bb12bbf8ce550eb5c2f026918bb344';
-const DEPLOYER_PK = '0x0154de503c7553e078b28044f15b60323899d9437bd44e99d9ab629acbada47a';
+const DEPLOYER_PK = process.env.DEPLOYER_PRIVATE_KEY;
 
 const SAGE_TOKEN = {
   address: '0x072349097c8a802e7f66dc96b95aca84e4d78ddad22014904076c76293a99850',

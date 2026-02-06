@@ -1,6 +1,6 @@
 import { RpcProvider } from 'starknet';
 
-const RPC_URL = "https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_7/GUBwFqKhSgn4mwVbN6Sbn";
+const RPC_URL = "https://starknet-sepolia.g.alchemy.com/starknet/version/rpc/v0_7/${process.env.ALCHEMY_API_KEY}";
 const provider = new RpcProvider({ nodeUrl: RPC_URL });
 
 const CONTRACTS = {

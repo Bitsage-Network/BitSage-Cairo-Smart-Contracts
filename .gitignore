@@ -11,19 +11,33 @@ testnet_*.json
 *_deployment*.log
 temp_account.json
 
-# Keystores (sensitive - NEVER commit)
+# Keystores & accounts (sensitive - NEVER commit)
 **/keystores/*.json
 **/keystore*.json
 deployment/sepolia_keystore.json
+deployment/sncast_accounts.json
 deployment/pool_wallets/
 admin_accounts/
 airdrop/keystores/
 *deployer*.json
+sncast.toml
 
 # Deploy scripts with credentials (use environment variables instead)
 deploy_*.mjs
 !scripts/deploy_paymaster_v2.mjs
 sign_deploy*.mjs
+
+# Root-level scripts with hardcoded credentials
+configure_contracts.mjs
+redeploy_failed.mjs
+redeploy_remaining.mjs
+redeploy_stwo.mjs
+whitelist_enclave.mjs
+
+# Scripts with hardcoded private keys
+scripts/configure_callbacks.mjs
+scripts/configure_cross_contracts.mjs
+scripts/test_proof_submission.mjs
 
 # Environment files
 .env
