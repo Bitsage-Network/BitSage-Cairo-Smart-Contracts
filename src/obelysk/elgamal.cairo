@@ -43,19 +43,15 @@ pub const GEN_X: felt252 = 0x1ef15c18599971b7beced415a40f0c7deacfd9b0d1819e03d72
 /// Generator point G - y coordinate
 pub const GEN_Y: felt252 = 0x5668060aa49730b7be4801df46ec62de53ecd11abe43a32873000c36e8dc1f;
 
-/// Second generator H for Pedersen commitments (derived from G)
-/// H = hash("OBELYSK_H") * G where the hash value is used as a scalar
-/// This ensures H is a valid curve point with unknown discrete log relation to G
-/// These coordinates were computed by multiplying G by Poseidon("OBELYSK_GENERATOR_H")
-///
-/// IMPORTANT: In production, H should be derived via a verifiable hash-to-curve
-/// procedure with public randomness to ensure no one knows dlog_G(H).
-/// For now, we use 2*G as H (known DL but simpler for testing).
-///
-/// Using H = 2*G computed as: ec_double(G)
-/// 2*G on STARK curve:
-pub const GEN_H_X: felt252 = 0x759ca09377679ecd535a81e83039658bf40959283187c654c5416f439403cf5;
-pub const GEN_H_Y: felt252 = 0x6f524a3400e7708d5c01a28598ad272e7455aa268f141f7885bd1a21e90c638;
+/// Second generator H for Pedersen commitments
+/// Derived via hash-to-curve: try-and-increment with Poseidon
+/// Domain: "OBELYSK_PEDERSEN_H_V1" (0x4f42454c59534b5f504544455253454e5f485f5631)
+/// Counter: 0
+/// Algorithm: x = Poseidon(domain, counter), y = sqrt(x³ + x + β) canonicalized to y ≤ p/2
+/// Nobody knows dlog_G(H) — binding property holds
+/// Derivation script: apps/web/scripts/deriveH.ts (in Obelysk-Protocol repo)
+pub const GEN_H_X: felt252 = 0x73bd2c9434c955f80b06d2847f8384a226d6cc2557a5735fd9f84d632f576be;
+pub const GEN_H_Y: felt252 = 0x1bd58ea52858154de69bf90e446ff200f173d49da444c4f462652ce6b93457e;
 
 // =============================================================================
 // STARK Curve Order as u256 (for modular arithmetic)
@@ -305,21 +301,10 @@ pub fn generator() -> ECPoint {
 }
 
 /// Get the second generator H (for Pedersen commitments)
-/// H = 2*G - computed dynamically to ensure it's always valid
+/// Returns the canonical H derived via hash-to-curve with Poseidon.
+/// See GEN_H_X/GEN_H_Y constants above for derivation details.
 pub fn generator_h() -> ECPoint {
-    // Compute H = 2*G = G + G
-    // This ensures H is always a valid curve point
-    let g = generator();
-
-    // Use native Cairo EC operations directly to avoid recursion
-    let native_g_opt = to_native_point(g);
-    if native_g_opt.is_none() {
-        // This should never happen since G is a known valid point
-        return ECPoint { x: GEN_H_X, y: GEN_H_Y };
-    }
-    let native_g = native_g_opt.unwrap();
-    let result = native_g + native_g;
-    from_native_point(result)
+    ECPoint { x: GEN_H_X, y: GEN_H_Y }
 }
 
 /// Create zero/identity point

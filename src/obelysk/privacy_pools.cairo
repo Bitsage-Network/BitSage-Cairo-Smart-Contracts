@@ -357,6 +357,73 @@ pub trait IPrivacyPools<TContractState> {
     fn cancel_upgrade(ref self: TContractState);
     fn get_upgrade_info(self: @TContractState) -> (starknet::ClassHash, u64, u64, u64);
     fn set_upgrade_delay(ref self: TContractState, new_delay: u64);
+
+    // =========================================================================
+    // STARK PROOF VERIFICATION (Herodotus Integrity + STWO)
+    // =========================================================================
+
+    /// Configure STARK proof verification parameters
+    fn configure_stark_verification(
+        ref self: TContractState,
+        integrity_verifier: ContractAddress,
+        range_proof_program_hash: felt252,
+        balance_proof_program_hash: felt252,
+        transfer_proof_program_hash: felt252,
+        min_security_bits: u32,
+    );
+
+    /// Enable/disable STARK proof requirement
+    fn set_stark_proofs_required(ref self: TContractState, required: bool);
+
+    /// Verify a STARK proof via Integrity FactRegistry
+    fn verify_stark_proof(self: @TContractState, fact_hash: felt252) -> bool;
+
+    /// Get current STARK verification configuration
+    fn get_stark_config(self: @TContractState) -> (
+        ContractAddress,  // integrity_verifier
+        felt252,          // range_proof_program_hash
+        felt252,          // balance_proof_program_hash
+        felt252,          // transfer_proof_program_hash
+        u32,              // min_security_bits
+        bool,             // stark_proofs_required
+    );
+
+    // =========================================================================
+    // WORLD ID SYBIL RESISTANCE
+    // =========================================================================
+
+    /// Configure World ID integration
+    fn configure_world_id(
+        ref self: TContractState,
+        world_id_bridge: ContractAddress,
+        required: bool,
+    );
+
+    /// Deposit with World ID human verification (sybil-resistant)
+    /// @param world_id_proof: Groth16 proof from World ID
+    /// @returns: Deposit index in global tree
+    fn pp_deposit_verified(
+        ref self: TContractState,
+        commitment: felt252,
+        amount_commitment: ECPoint,
+        asset_id: felt252,
+        amount: u256,
+        range_proof_data: Span<felt252>,
+        world_id_proof: Span<felt252>,
+    ) -> u64;
+
+    /// Check if a deposit was made by a verified human
+    fn is_human_verified_deposit(self: @TContractState, commitment: felt252) -> bool;
+
+    /// Check if a World ID nullifier has been used
+    fn is_world_id_nullifier_used(self: @TContractState, nullifier: u256) -> bool;
+
+    /// Get World ID configuration and stats
+    fn get_world_id_config(self: @TContractState) -> (
+        ContractAddress,  // world_id_bridge
+        bool,             // world_id_required
+        u64,              // human_verified_deposit_count
+    );
 }
 
 // =============================================================================
@@ -469,6 +536,42 @@ pub mod PrivacyPools {
         pending_upgrade: ClassHash,
         upgrade_scheduled_at: u64,
         upgrade_delay: u64,
+
+        // =========================================================================
+        // STARK PROOF VERIFICATION (Herodotus Integrity)
+        // =========================================================================
+        // Enables verifying STWO GPU proofs on-chain
+        // =========================================================================
+
+        /// Program hash for range proof STWO circuit
+        range_proof_program_hash: felt252,
+        /// Program hash for balance proof STWO circuit
+        balance_proof_program_hash: felt252,
+        /// Program hash for transfer proof STWO circuit
+        transfer_proof_program_hash: felt252,
+        /// Minimum security bits required for proof verification (default: 96)
+        min_security_bits: u32,
+        /// Whether STARK proofs are required for withdrawals
+        stark_proofs_required: bool,
+        /// Integrity verifier contract address (use proxy for auto-updates)
+        integrity_verifier: ContractAddress,
+
+        // =========================================================================
+        // WORLD ID SYBIL RESISTANCE
+        // =========================================================================
+        // Optional human verification for deposits (Worldcoin integration)
+        // =========================================================================
+
+        /// World ID bridge contract address (Nethermind Starknet-Worldcoin-Bridge)
+        world_id_bridge: ContractAddress,
+        /// Whether World ID is required for deposits (false = optional)
+        world_id_required: bool,
+        /// Track used World ID nullifiers (one-human-one-deposit)
+        world_id_nullifiers: Map<u256, bool>,
+        /// Map deposit commitment to World ID nullifier (for tracing)
+        deposit_world_id: Map<felt252, u256>,
+        /// Count of human-verified deposits
+        human_verified_deposit_count: u64,
     }
 
     // =========================================================================
@@ -499,6 +602,12 @@ pub mod PrivacyPools {
         UpgradeScheduled: UpgradeScheduled,
         UpgradeExecuted: UpgradeExecuted,
         UpgradeCancelled: UpgradeCancelled,
+        // STARK Proof Events
+        StarkVerificationConfigured: StarkVerificationConfigured,
+        StarkProofVerified: StarkProofVerified,
+        // World ID Events
+        WorldIDConfigured: WorldIDConfigured,
+        HumanVerifiedDeposit: HumanVerifiedDeposit,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -691,6 +800,55 @@ pub mod PrivacyPools {
         cancelled_class_hash: ClassHash,
         cancelled_at: u64,
         canceller: ContractAddress,
+    }
+
+    // =========================================================================
+    // STARK PROOF VERIFICATION EVENTS
+    // =========================================================================
+
+    #[derive(Drop, starknet::Event)]
+    struct StarkVerificationConfigured {
+        integrity_verifier: ContractAddress,
+        range_proof_program_hash: felt252,
+        balance_proof_program_hash: felt252,
+        transfer_proof_program_hash: felt252,
+        min_security_bits: u32,
+        configured_by: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct StarkProofVerified {
+        #[key]
+        fact_hash: felt252,
+        proof_type: felt252,  // 'range', 'balance', or 'transfer'
+        security_bits: u32,
+        verifier_used: ContractAddress,
+        timestamp: u64,
+    }
+
+    // =========================================================================
+    // WORLD ID SYBIL RESISTANCE EVENTS
+    // =========================================================================
+
+    #[derive(Drop, starknet::Event)]
+    struct WorldIDConfigured {
+        world_id_bridge: ContractAddress,
+        required: bool,
+        configured_by: ContractAddress,
+        timestamp: u64,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct HumanVerifiedDeposit {
+        #[key]
+        commitment: felt252,
+        #[key]
+        world_id_nullifier: u256,
+        depositor: ContractAddress,
+        asset_id: felt252,
+        global_index: u64,
+        timestamp: u64,
     }
 
     // =========================================================================
@@ -1495,6 +1653,134 @@ pub mod PrivacyPools {
             let pending = self.pending_upgrade.read();
             assert!(pending.is_zero(), "Cannot change delay with pending upgrade");
             self.upgrade_delay.write(new_delay);
+        }
+
+        // =====================================================================
+        // STARK PROOF VERIFICATION
+        // =====================================================================
+
+        fn configure_stark_verification(
+            ref self: ContractState,
+            integrity_verifier: ContractAddress,
+            range_proof_program_hash: felt252,
+            balance_proof_program_hash: felt252,
+            transfer_proof_program_hash: felt252,
+            min_security_bits: u32,
+        ) {
+            self._only_owner();
+            self.integrity_verifier.write(integrity_verifier);
+            self.range_proof_program_hash.write(range_proof_program_hash);
+            self.balance_proof_program_hash.write(balance_proof_program_hash);
+            self.transfer_proof_program_hash.write(transfer_proof_program_hash);
+            self.min_security_bits.write(min_security_bits);
+        }
+
+        fn set_stark_proofs_required(ref self: ContractState, required: bool) {
+            self._only_owner();
+            self.stark_proofs_required.write(required);
+        }
+
+        fn verify_stark_proof(self: @ContractState, fact_hash: felt252) -> bool {
+            let verifier = self.integrity_verifier.read();
+            if verifier.is_zero() {
+                return false;
+            }
+            // Call Integrity FactRegistry: is_valid(fact_hash) -> bool
+            let result = starknet::syscalls::call_contract_syscall(
+                verifier,
+                selector!("is_valid"),
+                array![fact_hash].span(),
+            );
+            match result {
+                Result::Ok(data) => {
+                    if data.len() > 0 {
+                        *data[0] == 1
+                    } else {
+                        false
+                    }
+                },
+                Result::Err(_) => false,
+            }
+        }
+
+        fn get_stark_config(self: @ContractState) -> (
+            ContractAddress, felt252, felt252, felt252, u32, bool,
+        ) {
+            (
+                self.integrity_verifier.read(),
+                self.range_proof_program_hash.read(),
+                self.balance_proof_program_hash.read(),
+                self.transfer_proof_program_hash.read(),
+                self.min_security_bits.read(),
+                self.stark_proofs_required.read(),
+            )
+        }
+
+        // =====================================================================
+        // WORLD ID SYBIL RESISTANCE
+        // =====================================================================
+
+        fn configure_world_id(
+            ref self: ContractState,
+            world_id_bridge: ContractAddress,
+            required: bool,
+        ) {
+            self._only_owner();
+            self.world_id_bridge.write(world_id_bridge);
+            self.world_id_required.write(required);
+        }
+
+        fn pp_deposit_verified(
+            ref self: ContractState,
+            commitment: felt252,
+            amount_commitment: ECPoint,
+            asset_id: felt252,
+            amount: u256,
+            range_proof_data: Span<felt252>,
+            world_id_proof: Span<felt252>,
+        ) -> u64 {
+            // Validate World ID proof if configured
+            let world_id_bridge = self.world_id_bridge.read();
+            assert!(!world_id_bridge.is_zero(), "World ID not configured");
+
+            // Extract nullifier from proof data (first 2 felts = u256)
+            assert!(world_id_proof.len() >= 2, "Invalid World ID proof");
+            let nullifier = u256 {
+                low: (*world_id_proof[0]).try_into().unwrap(),
+                high: (*world_id_proof[1]).try_into().unwrap(),
+            };
+
+            // Check nullifier not already used
+            assert!(!self.world_id_nullifiers.read(nullifier), "Nullifier already used");
+
+            // Mark nullifier as used
+            self.world_id_nullifiers.write(nullifier, true);
+            self.deposit_world_id.write(commitment, nullifier);
+            self.human_verified_deposit_count.write(
+                self.human_verified_deposit_count.read() + 1
+            );
+
+            // Perform the regular deposit
+            self.pp_deposit(commitment, amount_commitment, asset_id, amount, range_proof_data)
+        }
+
+        fn is_human_verified_deposit(self: @ContractState, commitment: felt252) -> bool {
+            let nullifier = self.deposit_world_id.read(commitment);
+            nullifier != 0
+        }
+
+        fn is_world_id_nullifier_used(self: @ContractState, nullifier: u256) -> bool {
+            self.world_id_nullifiers.read(nullifier)
+        }
+
+        fn get_world_id_config(self: @ContractState) -> (
+            ContractAddress, bool, u64,
+        ) {
+            (
+                self.world_id_bridge.read(),
+                self.world_id_required.read(),
+                self.human_verified_deposit_count.read(),
+            )
         }
     }
 

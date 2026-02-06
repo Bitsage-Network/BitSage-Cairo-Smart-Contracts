@@ -1218,28 +1218,28 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_2g() {
-        // Verify generator_h returns correct 2*G
+    fn test_generator_h_is_valid_point() {
+        // Verify generator_h returns the hash-to-curve derived H (not 2*G)
+        // H is derived via Poseidon hash-to-curve with domain "OBELYSK_PEDERSEN_H_V1"
+        // Nobody knows dlog_G(H), ensuring binding property of Pedersen commitments
+        let h = generator_h();
+
+        // H should not be zero
+        assert!(!is_zero(h), "H is zero");
+
+        // H should be on the curve (ec_mul(1, h) == h)
+        let h_check = ec_mul(1, h);
+        assert!(h_check.x == h.x, "H not on curve (x)");
+        assert!(h_check.y == h.y, "H not on curve (y)");
+
+        // H should NOT equal 2*G (that was the old insecure value)
         let g = generator();
         let two_g = ec_add(g, g);
+        assert!(h.x != two_g.x || h.y != two_g.y, "H should not be 2*G");
 
-        assert!(!is_zero(two_g), "2*G is zero");
-
-        // Verify ec_mul(2, g) gives same result
-        let two_g_via_mul = ec_mul(2, g);
-        assert!(!is_zero(two_g_via_mul), "ec_mul(2, g) is zero");
-        assert!(two_g.x == two_g_via_mul.x, "2*G methods disagree on x");
-        assert!(two_g.y == two_g_via_mul.y, "2*G methods disagree on y");
-
-        // Verify generator_h matches computed 2*G
-        let h = generator_h();
-        assert!(h.x == two_g.x, "GEN_H_X is wrong");
-        assert!(h.y == two_g.y, "GEN_H_Y is wrong");
-
-        // NOTE: For production, update elgamal.cairo GEN_H constants to:
-        // GEN_H_X = h.x (the computed value)
-        // GEN_H_Y = h.y (the computed value)
-        // Then revert generator_h() to use constants for gas efficiency
+        // Verify expected constants
+        assert!(h.x == 0x73bd2c9434c955f80b06d2847f8384a226d6cc2557a5735fd9f84d632f576be, "GEN_H_X wrong");
+        assert!(h.y == 0x1bd58ea52858154de69bf90e446ff200f173d49da444c4f462652ce6b93457e, "GEN_H_Y wrong");
     }
 
     #[test]
