@@ -10,6 +10,9 @@
 // ensuring that results truly originate from trusted execution environments.
 
 use core::poseidon::poseidon_hash_span;
+use core::starknet::secp256r1::Secp256r1Point;
+use core::starknet::secp256_trait::{Secp256Trait, Secp256PointTrait, is_valid_signature};
+use starknet::SyscallResultTrait;
 
 // ============================================================================
 // TEE Type Constants
@@ -300,26 +303,25 @@ pub fn parse_nvidia_body(quote_data: Span<felt252>) -> NvidiaCCQuoteBody {
 // ECDSA P-256 Signature Verification
 // ============================================================================
 
-/// Verify ECDSA P-256 signature structure and validity
+/// Full ECDSA P-256 signature verification using native Starknet secp256r1 syscalls.
 ///
-/// Production TEE Attestation Security Model:
-/// 1. PRIMARY: Enclave measurement is verified against on-chain whitelist
-/// 2. PRIMARY: Nonce freshness prevents replay attacks
-/// 3. PRIMARY: Report data binding ensures result authenticity
-/// 4. SECONDARY: Signature structure validation
+/// Performs complete cryptographic verification:
+/// 1. Validates signature components (r, s) are in [1, n-1]
+/// 2. Validates public key is on the secp256r1 curve (via syscall)
+/// 3. Enforces low-S to prevent signature malleability
+/// 4. Computes s^(-1) mod n
+/// 5. Computes u1 = message_hash * s^(-1) mod n
+/// 6. Computes u2 = r * s^(-1) mod n
+/// 7. Computes point R = u1*G + u2*PK (EC scalar multiplication + addition)
+/// 8. Verifies R.x mod n == r
 ///
-/// The TEE hardware (Intel TDX, AMD SEV-SNP, NVIDIA CC) provides:
-/// - Hardware-rooted attestation that cannot be forged
-/// - Measurement of the code running in the enclave
-/// - Cryptographic binding of report_data to attestation
-///
-/// Returns true if signature structure is valid
+/// Returns true only if the signature is cryptographically valid.
 pub fn verify_ecdsa_p256(
     message_hash: u256,
     signature: ECDSASignature,
     public_key: ECDSAPublicKey,
 ) -> bool {
-    // Construct signature components
+    // Construct u256 values from split components
     let r: u256 = u256 {
         low: signature.r_low,
         high: signature.r_high,
@@ -328,8 +330,6 @@ pub fn verify_ecdsa_p256(
         low: signature.s_low,
         high: signature.s_high,
     };
-
-    // Construct the public key coordinates
     let pk_x: u256 = u256 {
         low: public_key.x_low,
         high: public_key.x_high,
@@ -340,7 +340,7 @@ pub fn verify_ecdsa_p256(
     };
 
     // =========================================================================
-    // VALIDATION 1: Signature components in valid range [1, n-1]
+    // PRE-CHECK: Signature components in valid range [1, n-1]
     // n is the order of the secp256r1 (P-256) curve
     // =========================================================================
     let n: u256 = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551_u256;
@@ -353,106 +353,42 @@ pub fn verify_ecdsa_p256(
     }
 
     // =========================================================================
-    // VALIDATION 2: Public key coordinates in valid range [0, p-1]
-    // p is the field prime for secp256r1
-    // =========================================================================
-    let p: u256 = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff_u256;
-    if pk_x >= p || pk_y >= p {
-        return false;
-    }
-
-    // =========================================================================
-    // VALIDATION 3: Public key is on the curve
-    // Curve equation: y² = x³ - 3x + b (mod p)
-    // For secp256r1: b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b
-    // =========================================================================
-    let b: u256 = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b_u256;
-
-    // Compute y² mod p
-    let y_squared = mulmod(pk_y, pk_y, p);
-
-    // Compute x³ mod p
-    let x_squared = mulmod(pk_x, pk_x, p);
-    let x_cubed = mulmod(x_squared, pk_x, p);
-
-    // Compute -3x mod p (equivalent to x³ - 3x)
-    let three_x = mulmod(3, pk_x, p);
-    let x_cubed_minus_3x = submod(x_cubed, three_x, p);
-
-    // Compute x³ - 3x + b mod p
-    let rhs = addmod(x_cubed_minus_3x, b, p);
-
-    // Verify y² = x³ - 3x + b (point is on curve)
-    if y_squared != rhs {
-        return false;
-    }
-
-    // =========================================================================
-    // VALIDATION 4: Message hash is non-zero
+    // PRE-CHECK: Message hash is non-zero
     // =========================================================================
     if message_hash == 0 {
         return false;
     }
 
     // =========================================================================
-    // VALIDATION 5: Low-S check (prevent signature malleability)
-    // Valid signatures have s <= n/2
+    // PRE-CHECK: Low-S enforcement (prevent signature malleability)
+    // Valid signatures must have s <= n/2
     // =========================================================================
     let half_n: u256 = 0x7fffffff800000007fffffffffffffffde737d56d38bcf4279dce5617e3192a8_u256;
     if s > half_n {
         return false;
     }
 
-    // All structural validations passed
-    // The signature format is valid and the public key is on the curve
-    //
-    // NOTE: Full ECDSA verification would require:
-    // 1. Computing s^(-1) mod n (modular inverse)
-    // 2. Computing u1 = hash * s^(-1) mod n
-    // 3. Computing u2 = r * s^(-1) mod n
-    // 4. Computing point (x, y) = u1*G + u2*PK
-    // 5. Verifying x mod n == r
-    //
-    // However, for TEE attestation, the primary security comes from:
-    // - Hardware-rooted attestation chain (Intel/AMD/NVIDIA root of trust)
-    // - Enclave measurement matching whitelisted code hash
-    // - Nonce-based replay protection
-    // - Report data binding to job result
-    //
-    // A forged signature would require compromising the TEE attestation hardware,
-    // which is protected by platform security features.
+    // =========================================================================
+    // CURVE POINT VALIDATION + FULL ECDSA VERIFICATION
+    // Uses native Starknet secp256r1 syscall — hardware-accelerated
+    // =========================================================================
 
-    true
-}
+    // Create public key point on secp256r1 (P-256) curve via syscall.
+    // Returns None if (pk_x, pk_y) is not a valid point on the curve.
+    let pk_point = match Secp256Trait::<Secp256r1Point>::secp256_ec_new_syscall(pk_x, pk_y)
+        .unwrap_syscall() {
+        Option::Some(point) => point,
+        Option::None => { return false; },
+    };
 
-/// Modular multiplication: (a * b) mod m
-fn mulmod(a: u256, b: u256, m: u256) -> u256 {
-    // Use Cairo's native u256 operations with modular reduction
-    // For 256-bit values, we need to handle overflow carefully
-    let a_mod = a % m;
-    let b_mod = b % m;
-
-    // Simple multiplication with mod (works for our use case)
-    // In production with large values, use extended precision
-    (a_mod * b_mod) % m
-}
-
-/// Modular addition: (a + b) mod m
-fn addmod(a: u256, b: u256, m: u256) -> u256 {
-    let a_mod = a % m;
-    let b_mod = b % m;
-    (a_mod + b_mod) % m
-}
-
-/// Modular subtraction: (a - b) mod m
-fn submod(a: u256, b: u256, m: u256) -> u256 {
-    let a_mod = a % m;
-    let b_mod = b % m;
-    if a_mod >= b_mod {
-        a_mod - b_mod
-    } else {
-        m - (b_mod - a_mod)
-    }
+    // Full ECDSA P-256 signature verification via Starknet native syscall.
+    // Internally computes:
+    //   s_inv = s^(-1) mod n
+    //   u1 = message_hash * s_inv mod n
+    //   u2 = r * s_inv mod n
+    //   R = u1 * G + u2 * PK  (EC scalar multiplication + point addition)
+    //   valid = (R.x mod n == r)
+    is_valid_signature::<Secp256r1Point>(message_hash, r, s, pk_point)
 }
 
 // ============================================================================
