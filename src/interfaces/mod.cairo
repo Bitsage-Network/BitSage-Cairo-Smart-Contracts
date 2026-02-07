@@ -25,7 +25,7 @@ pub use paymaster::{
 
 // Re-export commonly used types from sage_token
 pub use sage_token::{
-    ISAGEToken, GovernanceProposal, BurnEvent, SecurityBudget
+    ISAGEToken, IERC20CamelOnly, GovernanceProposal, BurnEvent, SecurityBudget
 };
 
 // Re-export commonly used types from reputation_manager

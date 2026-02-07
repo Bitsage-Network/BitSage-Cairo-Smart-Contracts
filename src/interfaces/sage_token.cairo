@@ -565,4 +565,28 @@ pub trait ISAGEToken<TContractState> {
     /// @return team_cliff_passed: Whether team cliff period has passed
     /// @return public_sale_vested_pct: Public sale vesting progress in basis points
     fn get_vesting_status(self: @TContractState) -> (u32, u32, bool, u32);
-} 
+}
+
+/// camelCase ERC20 compatibility interface
+/// Required by Ekubo, standard DeFi protocols, and block explorers
+#[starknet::interface]
+pub trait IERC20CamelOnly<TContractState> {
+    fn totalSupply(self: @TContractState) -> u256;
+    fn balanceOf(self: @TContractState, account: ContractAddress) -> u256;
+    fn transferFrom(
+        ref self: TContractState,
+        sender: ContractAddress,
+        recipient: ContractAddress,
+        amount: u256,
+    ) -> bool;
+    fn increaseAllowance(
+        ref self: TContractState,
+        spender: ContractAddress,
+        addedValue: u256,
+    ) -> bool;
+    fn decreaseAllowance(
+        ref self: TContractState,
+        spender: ContractAddress,
+        subtractedValue: u256,
+    ) -> bool;
+}

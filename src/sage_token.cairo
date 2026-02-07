@@ -27,9 +27,9 @@ pub mod SAGEToken {
     use starknet::SyscallResultTrait;
 
     use sage_contracts::interfaces::sage_token::{
-        ISAGEToken, GovernanceProposal, BurnEvent, GovernanceRights, GovernanceStats,
-        SecurityBudget, RateLimitInfo, EmergencyOperation, PendingTransfer,
-        ProposalStatus
+        ISAGEToken, IERC20CamelOnly, GovernanceProposal, BurnEvent, GovernanceRights,
+        GovernanceStats, SecurityBudget, RateLimitInfo, EmergencyOperation,
+        PendingTransfer, ProposalStatus
     };
     use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::upgrades::UpgradeableComponent;
@@ -2298,6 +2298,44 @@ pub mod SAGEToken {
             };
 
             (treasury_pct, team_pct, team_cliff_passed, public_pct)
+        }
+    }
+
+    /// camelCase ERC20 compatibility
+    /// Required by Ekubo Positions, standard DeFi tooling, and block explorers.
+    #[abi(embed_v0)]
+    impl ERC20CamelOnlyImpl of IERC20CamelOnly<ContractState> {
+        fn totalSupply(self: @ContractState) -> u256 {
+            SAGETokenImpl::total_supply(self)
+        }
+
+        fn balanceOf(self: @ContractState, account: ContractAddress) -> u256 {
+            SAGETokenImpl::balance_of(self, account)
+        }
+
+        fn transferFrom(
+            ref self: ContractState,
+            sender: ContractAddress,
+            recipient: ContractAddress,
+            amount: u256,
+        ) -> bool {
+            SAGETokenImpl::transfer_from(ref self, sender, recipient, amount)
+        }
+
+        fn increaseAllowance(
+            ref self: ContractState,
+            spender: ContractAddress,
+            addedValue: u256,
+        ) -> bool {
+            SAGETokenImpl::increase_allowance(ref self, spender, addedValue)
+        }
+
+        fn decreaseAllowance(
+            ref self: ContractState,
+            spender: ContractAddress,
+            subtractedValue: u256,
+        ) -> bool {
+            SAGETokenImpl::decrease_allowance(ref self, spender, subtractedValue)
         }
     }
 
