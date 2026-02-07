@@ -3,6 +3,9 @@ pub mod stwo_verifier;
 pub mod prover_registry;
 pub mod validator_registry;
 
+// On-chain ML proof verification — sumcheck over M31/QM31 (STWO fields)
+pub mod sumcheck_verifier;
+
 // Proof Verification & Aggregation
 pub mod fri_verifier;
 pub mod batch_verifier;
