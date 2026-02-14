@@ -40,5 +40,8 @@ pub mod fhe_verifier;
 // Shielded Swap Router — Private token swaps via Ekubo AMM (ILocker pattern)
 pub mod shielded_swap_router;
 
+// SVCR — Streaming Verifiable Compute Receipts (GPU inference billing verification)
+pub mod inference_verifier;
+
 // Stealth Address Registry (TODO: fix stealth_payments dependency)
 // pub mod stealth_registry;
