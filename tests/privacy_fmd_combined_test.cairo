@@ -252,6 +252,7 @@ fn test_private_payment_with_fmd_detection() {
         commitment,
         amount_commitment,
         asset_id,
+        1000_u256,
         array![].span(),  // range_proof_data
     );
     stop_cheat_caller_address(pp.contract_address);
@@ -326,9 +327,9 @@ fn test_multi_recipient_privacy_payments() {
 
     // Deposit all to Privacy Pools
     start_cheat_caller_address(pp.contract_address, sender);
-    pp.pp_deposit(c1, create_amount_commitment(500, 'b1'), 'SAGE', array![].span());
-    pp.pp_deposit(c2, create_amount_commitment(1000, 'b2'), 'SAGE', array![].span());
-    pp.pp_deposit(c3, create_amount_commitment(1500, 'b3'), 'SAGE', array![].span());
+    pp.pp_deposit(c1, create_amount_commitment(500, 'b1'), 'SAGE', 1000_u256, array![].span());
+    pp.pp_deposit(c2, create_amount_commitment(1000, 'b2'), 'SAGE', 1000_u256, array![].span());
+    pp.pp_deposit(c3, create_amount_commitment(1500, 'b3'), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     // =========================================================================
@@ -397,6 +398,7 @@ fn test_privacy_pools_batch_with_fmd() {
             create_amount_commitment(500, 'bl5'),
         ].span(),
         array!['SAGE', 'SAGE', 'SAGE', 'SAGE', 'SAGE'].span(),
+        array![1000_u256, 1000_u256, 1000_u256, 1000_u256, 1000_u256].span(),
         array![].span(),
     );
     stop_cheat_caller_address(pp.contract_address);
@@ -424,7 +426,7 @@ fn test_detection_with_compliance_flow() {
 
     // Deposit
     start_cheat_caller_address(pp.contract_address, sender);
-    pp.pp_deposit(commitment, create_amount_commitment(5000, 'comp_b'), 'SAGE', array![].span());
+    pp.pp_deposit(commitment, create_amount_commitment(5000, 'comp_b'), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     // =========================================================================
@@ -501,6 +503,7 @@ fn test_observer_cannot_link_transactions() {
             *commitments.at(j),
             create_amount_commitment(((j + 1) * 100).into(), j.into()),
             'SAGE',
+            1000_u256,
             array![].span()
         );
         j += 1;
@@ -571,8 +574,8 @@ fn test_selective_disclosure_with_fmd() {
 
     // Deposit both
     start_cheat_caller_address(pp.contract_address, sender);
-    pp.pp_deposit(personal_commitment, create_amount_commitment(100, 'pb'), 'SAGE', array![].span());
-    pp.pp_deposit(business_commitment, create_amount_commitment(10000, 'bb'), 'SAGE', array![].span());
+    pp.pp_deposit(personal_commitment, create_amount_commitment(100, 'pb'), 'SAGE', 1000_u256, array![].span());
+    pp.pp_deposit(business_commitment, create_amount_commitment(10000, 'bb'), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     // User detects personal payments with personal key
@@ -609,7 +612,7 @@ fn test_events_emitted_on_fmd_deposit() {
 
     // Deposit
     start_cheat_caller_address(pp.contract_address, sender);
-    pp.pp_deposit(commitment, create_amount_commitment(999, 'eb'), 'SAGE', array![].span());
+    pp.pp_deposit(commitment, create_amount_commitment(999, 'eb'), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     // Verify events emitted
