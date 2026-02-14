@@ -14,6 +14,7 @@ use core::array::ArrayTrait;
 use core::traits::TryInto;
 use core::option::OptionTrait;
 use core::serde::Serde;
+use core::num::traits::Zero;
 use starknet::ContractAddress;
 use starknet::contract_address_const;
 

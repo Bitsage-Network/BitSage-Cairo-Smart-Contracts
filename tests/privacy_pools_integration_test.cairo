@@ -477,7 +477,7 @@ fn test_pp_deposit() {
     let amount_commitment = create_amount_commitment();
 
     start_cheat_caller_address(pp.contract_address, alice);
-    let global_index = pp.pp_deposit(commitment, amount_commitment, 'SAGE', array![].span());
+    let global_index = pp.pp_deposit(commitment, amount_commitment, 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     assert(global_index == 0, 'First deposit index 0');
@@ -501,6 +501,7 @@ fn test_pp_batch_deposit() {
         array![c1, c2, c3].span(),
         array![ac1, ac2, ac3].span(),
         array!['SAGE', 'SAGE', 'SAGE'].span(),
+        array![1000_u256, 1000_u256, 1000_u256].span(),
         array![].span()
     );
     stop_cheat_caller_address(pp.contract_address);
@@ -518,14 +519,14 @@ fn test_global_deposit_root_updates() {
     let initial_root = pp.get_global_deposit_root();
 
     start_cheat_caller_address(pp.contract_address, alice);
-    pp.pp_deposit(create_test_commitment('d1'), create_amount_commitment(), 'SAGE', array![].span());
+    pp.pp_deposit(create_test_commitment('d1'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     let root_after_1 = pp.get_global_deposit_root();
     assert(root_after_1 != initial_root, 'Root should change');
 
     start_cheat_caller_address(pp.contract_address, bob);
-    pp.pp_deposit(create_test_commitment('d2'), create_amount_commitment(), 'SAGE', array![].span());
+    pp.pp_deposit(create_test_commitment('d2'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     let root_after_2 = pp.get_global_deposit_root();
@@ -540,7 +541,7 @@ fn test_deposit_info_retrieval() {
     let amount_commitment = create_amount_commitment();
 
     start_cheat_caller_address(pp.contract_address, alice);
-    let idx = pp.pp_deposit(commitment, amount_commitment, 'SAGE', array![].span());
+    let idx = pp.pp_deposit(commitment, amount_commitment, 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     let deposit_info = pp.get_pp_deposit_info(commitment);
@@ -560,12 +561,12 @@ fn test_pp_stats() {
 
     // Make some deposits
     start_cheat_caller_address(pp.contract_address, alice);
-    pp.pp_deposit(create_test_commitment('s1'), create_amount_commitment(), 'SAGE', array![].span());
-    pp.pp_deposit(create_test_commitment('s2'), create_amount_commitment(), 'SAGE', array![].span());
+    pp.pp_deposit(create_test_commitment('s1'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
+    pp.pp_deposit(create_test_commitment('s2'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     start_cheat_caller_address(pp.contract_address, bob);
-    pp.pp_deposit(create_test_commitment('s3'), create_amount_commitment(), 'SAGE', array![].span());
+    pp.pp_deposit(create_test_commitment('s3'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     let (deposit_count, withdrawal_count, ragequit_count, nullifier_count) = pp.get_pp_stats();
@@ -593,7 +594,7 @@ fn test_pause_unpause() {
 
     // Verify operations work after unpause
     start_cheat_caller_address(pp.contract_address, alice);
-    let _idx = pp.pp_deposit(create_test_commitment('pause_test'), create_amount_commitment(), 'SAGE', array![].span());
+    let _idx = pp.pp_deposit(create_test_commitment('pause_test'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 }
 
@@ -613,7 +614,7 @@ fn test_deposits_work_after_unpause() {
 
     // Deposit should work
     start_cheat_caller_address(pp.contract_address, alice);
-    let _idx = pp.pp_deposit(create_test_commitment('after_pause'), create_amount_commitment(), 'SAGE', array![].span());
+    let _idx = pp.pp_deposit(create_test_commitment('after_pause'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 }
 
@@ -666,11 +667,11 @@ fn test_full_privacy_pools_flow() {
     let bob_commitment = create_test_commitment('bob_full_flow');
 
     start_cheat_caller_address(pp.contract_address, alice);
-    let alice_idx = pp.pp_deposit(alice_commitment, create_amount_commitment(), 'SAGE', array![].span());
+    let alice_idx = pp.pp_deposit(alice_commitment, create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     start_cheat_caller_address(pp.contract_address, bob);
-    let bob_idx = pp.pp_deposit(bob_commitment, create_amount_commitment(), 'SAGE', array![].span());
+    let bob_idx = pp.pp_deposit(bob_commitment, create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     // Step 4: ASP creates inclusion set with approved deposits
@@ -703,7 +704,7 @@ fn test_deposit_emits_event() {
     let mut spy = spy_events();
 
     start_cheat_caller_address(pp.contract_address, alice);
-    pp.pp_deposit(create_test_commitment('event_test'), create_amount_commitment(), 'SAGE', array![].span());
+    pp.pp_deposit(create_test_commitment('event_test'), create_amount_commitment(), 'SAGE', 1000_u256, array![].span());
     stop_cheat_caller_address(pp.contract_address);
 
     let events = spy.get_events();

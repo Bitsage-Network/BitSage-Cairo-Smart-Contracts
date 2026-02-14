@@ -20,12 +20,16 @@
 //
 // Full transcript replay:
 //   1. mix_u64(m), mix_u64(k), mix_u64(n)        — bind matrix dimensions
-//   2. draw_secure_felts(m_log + n_log)           — advance channel past row/col challenges
-//   3. For each sumcheck round:
+//   2. draw_qm31s(m_log), draw_qm31s(n_log)      — row/col challenges (1 draw per QM31)
+//   3. mix_felt(pack(claimed_sum))                 — bind claimed evaluation
+//   4. mix_felt(a_commitment), mix_felt(b_commitment) — bind MLE commitments
+//   5. For each sumcheck round:
 //      a. mix_felts(round_poly coefficients)       — absorb prover's polynomial
-//      b. challenge = draw_secure_felt()           — derive verifier's randomness
+//      b. challenge = draw_qm31()                  — derive verifier's randomness
 //      c. Check: p(0) + p(1) = expected_sum       — sumcheck round check
-//   4. Final check: expected_sum = a_eval × b_eval — evaluation consistency
+//   6. Final check: expected_sum = a_eval × b_eval — evaluation consistency
+//   7. verify_mle_opening(A, assignment, channel)  — verify A MLE
+//   8. verify_mle_opening(B, assignment, channel)  — verify B MLE
 
 use core::poseidon::{poseidon_hash_span, hades_permutation};
 
@@ -59,7 +63,7 @@ fn m31_mul(a: u64, b: u64) -> u64 {
 }
 
 /// Reduce a value to M31 range [0, P). Handles the edge case val == M31_P → 0.
-fn m31_reduce(val: u64) -> u64 {
+pub fn m31_reduce(val: u64) -> u64 {
     val % M31_P
 }
 
@@ -69,9 +73,9 @@ fn m31_reduce(val: u64) -> u64 {
 
 /// Complex M31: a + b·i where i² = -1
 #[derive(Drop, Copy, Serde)]
-struct CM31 {
-    a: u64,
-    b: u64,
+pub struct CM31 {
+    pub a: u64,
+    pub b: u64,
 }
 
 fn cm31_add(x: CM31, y: CM31) -> CM31 {
@@ -103,9 +107,9 @@ fn cm31_eq(x: CM31, y: CM31) -> bool {
 /// Components: (a.a, a.b, b.a, b.b) — four M31 values.
 /// Matches STWO's QM31(CM31(m31_0, m31_1), CM31(m31_2, m31_3)).
 #[derive(Drop, Copy, Serde)]
-struct QM31 {
-    a: CM31, // "real" CM31 part
-    b: CM31, // "j" coefficient
+pub struct QM31 {
+    pub a: CM31, // "real" CM31 part
+    pub b: CM31, // "j" coefficient
 }
 
 fn qm31_zero() -> QM31 {
@@ -188,21 +192,30 @@ fn poly_eval_degree2(c0: QM31, c1: QM31, c2: QM31, x: QM31) -> QM31 {
 
 /// Channel state matching STWO's Poseidon252Channel { digest, n_draws }.
 #[derive(Drop, Copy)]
-struct PoseidonChannel {
-    digest: felt252,
-    n_draws: u32,
+pub struct PoseidonChannel {
+    pub digest: felt252,
+    pub n_draws: u32,
 }
 
 /// Poseidon252Channel::default() — initial state.
-fn channel_default() -> PoseidonChannel {
+pub fn channel_default() -> PoseidonChannel {
     PoseidonChannel { digest: 0, n_draws: 0 }
 }
 
 /// Mix a u64 value into the channel.
 /// Matches: self.update_digest(poseidon_hash(self.digest, value.into()))
 /// poseidon_hash(a, b) in starknet_crypto = hades_permutation(a, b, 2)[0]
-fn channel_mix_u64(ref ch: PoseidonChannel, value: u64) {
+pub fn channel_mix_u64(ref ch: PoseidonChannel, value: u64) {
     let (s0, _, _) = hades_permutation(ch.digest, value.into(), 2);
+    ch.digest = s0;
+    ch.n_draws = 0;
+}
+
+/// Mix a felt252 value into the channel.
+/// Matches Rust's PoseidonChannel::mix_felt(value):
+///   state = [digest, value, 2]; hades(&state); digest = state[0]; n_draws = 0;
+pub fn channel_mix_felt(ref ch: PoseidonChannel, value: felt252) {
+    let (s0, _, _) = hades_permutation(ch.digest, value, 2);
     ch.digest = s0;
     ch.n_draws = 0;
 }
@@ -253,7 +266,7 @@ fn felt252_to_m31_array_8(
 /// Matches: draw_secure_felt() = draw_base_felts()[0..4] → QM31
 /// Consumes 1 Poseidon permutation (n_draws increments by 1).
 /// Discards the upper 4 M31 values (same as Poseidon252Channel).
-fn channel_draw_qm31(ref ch: PoseidonChannel) -> QM31 {
+pub fn channel_draw_qm31(ref ch: PoseidonChannel) -> QM31 {
     let felt = channel_draw_felt252(ref ch);
     let (m0, m1, m2, m3, _, _, _, _) = felt252_to_m31_array_8(felt);
     QM31 {
@@ -262,59 +275,19 @@ fn channel_draw_qm31(ref ch: PoseidonChannel) -> QM31 {
     }
 }
 
-/// Draw multiple QM31 challenges with proper buffering.
-/// Matches: draw_secure_felts(n) which flattens draw_base_felts() into a stream
-/// of M31 values and consumes 4 per QM31. Uses ceil(n/2) Poseidon permutations.
-///
-/// Buffer pattern:
-///   QM31 #0: m31[0..4] from draw #0
-///   QM31 #1: m31[4..8] from draw #0
-///   QM31 #2: m31[0..4] from draw #1
-///   QM31 #3: m31[4..8] from draw #1
-///   ...
-fn channel_draw_qm31s(ref ch: PoseidonChannel, count: u32) -> Array<QM31> {
+/// Draw multiple QM31 challenges from the channel.
+/// Each QM31 consumes 1 Poseidon permutation (1 draw per QM31).
+/// Matches Rust's PoseidonChannel::draw_qm31s() — no buffering.
+pub fn channel_draw_qm31s(ref ch: PoseidonChannel, count: u32) -> Array<QM31> {
     let mut result: Array<QM31> = array![];
     let mut i: u32 = 0;
-    // Buffer: upper 4 M31 from previous draw
-    let mut buf_m4: u64 = 0;
-    let mut buf_m5: u64 = 0;
-    let mut buf_m6: u64 = 0;
-    let mut buf_m7: u64 = 0;
-    let mut buf_available: bool = false;
-
     loop {
         if i >= count {
             break;
         }
-
-        if buf_available {
-            // Use the remaining 4 M31 from the previous draw
-            result.append(QM31 {
-                a: CM31 { a: buf_m4, b: buf_m5 },
-                b: CM31 { a: buf_m6, b: buf_m7 },
-            });
-            buf_available = false;
-        } else {
-            // New Poseidon permutation
-            let felt = channel_draw_felt252(ref ch);
-            let (m0, m1, m2, m3, m4, m5, m6, m7) = felt252_to_m31_array_8(felt);
-
-            result.append(QM31 {
-                a: CM31 { a: m0, b: m1 },
-                b: CM31 { a: m2, b: m3 },
-            });
-
-            // Buffer upper 4 M31 for potential next QM31
-            buf_m4 = m4;
-            buf_m5 = m5;
-            buf_m6 = m6;
-            buf_m7 = m7;
-            buf_available = true;
-        }
-
+        result.append(channel_draw_qm31(ref ch));
         i += 1;
     };
-
     result
 }
 
@@ -337,7 +310,7 @@ fn pack_qm31_into_felt(mut cur: felt252, v: QM31) -> felt252 {
 ///   Chunk [c2]     → 4 M31 → 1 felt252 (starting from ONE)
 ///   digest = poseidon_hash_many([digest, packed1, packed2])
 ///          = poseidon_hash_span(array![digest, packed1, packed2].span())
-fn channel_mix_poly_coeffs(ref ch: PoseidonChannel, c0: QM31, c1: QM31, c2: QM31) {
+pub fn channel_mix_poly_coeffs(ref ch: PoseidonChannel, c0: QM31, c1: QM31, c2: QM31) {
     // Chunk 1: pack [c0, c1] → 8 M31 → 1 felt252
     let mut packed1: felt252 = 1; // FieldElement252::ONE
     packed1 = pack_qm31_into_felt(packed1, c0);
@@ -372,10 +345,9 @@ struct RoundPoly {
 /// Data for a single query at a single folding round of the MLE opening protocol.
 #[derive(Drop, Serde)]
 struct MleQueryRoundData {
-    /// Value at the even position of the pair (L_i[2j]).
-    /// For layer 0, only the first M31 component (a.a) is meaningful.
+    /// Value at the lo half (L_i[idx]) — QM31 packed as felt252 for Merkle leaf.
     left_value: QM31,
-    /// Value at the odd position of the pair (L_i[2j+1]).
+    /// Value at the hi half (L_i[mid + idx]) — QM31 packed as felt252 for Merkle leaf.
     right_value: QM31,
     /// Merkle path siblings for the left value (bottom-up).
     left_siblings: Array<felt252>,
@@ -386,7 +358,7 @@ struct MleQueryRoundData {
 /// Complete data for a single query across all folding rounds.
 #[derive(Drop, Serde)]
 struct MleQueryProof {
-    /// Initial query pair index in layer 0 (positions 2*index and 2*index+1).
+    /// Initial query index in layer 0 (lo/hi pair: layer[idx] and layer[mid+idx]).
     initial_pair_index: u32,
     /// Authentication data at each folding round.
     rounds: Array<MleQueryRoundData>,
@@ -597,32 +569,27 @@ fn pow2(n: u32) -> u32 {
 // Verifies that a multilinear extension committed via Poseidon Merkle tree
 // evaluates to a claimed value at a given point.
 //
-// Protocol (multilinear folding):
-//   1. Prover commits matrix entries in a Poseidon Merkle tree (root R₀)
-//   2. Prover folds entries with each point variable:
-//      L_{i+1}[j] = challenge*(L_i[2j+1] - L_i[2j]) + L_i[2j]
+// Protocol (matching Rust's mle_opening.rs):
+//   1. Prover commits evaluations in a Poseidon Merkle tree (root R₀)
+//   2. Prover folds with lo/hi split:
+//      L_{i+1}[j] = L_i[j] + r[i] * (L_i[mid+j] - L_i[j])
 //   3. Prover commits intermediate layers → roots R₁, ..., R_{n-1}
-//   4. Verifier draws query indices via Fiat-Shamir (seeded from all roots + point)
-//   5. For each query, verifier checks Merkle proofs + folding consistency
+//   4. Channel absorbs R₀, R₁, ..., R_{n-1} via mix_felt
+//   5. Verifier draws query indices from channel
+//   6. For each query, verifier checks Merkle proofs + folding consistency
 //
-// Leaf hashing: poseidon_hash(value, 0)
-//   Layer 0: value = M31 as felt252
-//   Layer 1+: value = QM31 packed via big-endian 2^31 from ONE
+// Leaf values: raw packed QM31 (securefield_to_felt), no per-leaf hash
 // Internal nodes: poseidon_hash(left, right)
+// Folding order: forward (first variable first)
 // ============================================================================
 
 /// Number of spot-check queries for the MLE folding protocol.
-const MLE_NUM_QUERIES: u32 = 20;
-
-/// Hash an M31 value as a Merkle leaf: poseidon_hash(value, 0).
-fn hash_m31_leaf(value: u64) -> felt252 {
-    let (s0, _, _) = hades_permutation(value.into(), 0, 2);
-    s0
-}
+/// Matches Rust's MLE_N_QUERIES = 14.
+const MLE_NUM_QUERIES: u32 = 14;
 
 /// Pack QM31 into a single felt252.
-/// Big-endian 2^31 packing starting from ONE (matching STWO's qm31_to_felt).
-fn pack_qm31_to_felt(v: QM31) -> felt252 {
+/// Big-endian 2^31 packing starting from ONE (matching STWO's securefield_to_felt).
+pub fn pack_qm31_to_felt(v: QM31) -> felt252 {
     let shift: felt252 = 0x80000000; // 2^31
     let mut result: felt252 = 1;
     result = result * shift + v.a.a.into();
@@ -630,13 +597,6 @@ fn pack_qm31_to_felt(v: QM31) -> felt252 {
     result = result * shift + v.b.a.into();
     result = result * shift + v.b.b.into();
     result
-}
-
-/// Hash a QM31 value as a Merkle leaf: poseidon_hash(pack(value), 0).
-fn hash_qm31_leaf(value: QM31) -> felt252 {
-    let packed = pack_qm31_to_felt(value);
-    let (s0, _, _) = hades_permutation(packed, 0, 2);
-    s0
 }
 
 /// Verify a Poseidon Merkle authentication path.
@@ -667,160 +627,117 @@ fn verify_merkle_path(
     current == root
 }
 
-/// Derive deterministic query indices from a Fiat-Shamir seed.
-///
-/// Matches Rust's derive_query_indices: chain-hash (seed,0) → (h0,1) → (h1,2) → ...
-/// Extract lower 64 bits of each hash, then mod range.
-fn derive_mle_query_indices(seed: felt252, count: u32, range: u32) -> Array<u32> {
+/// Draw query indices from the Poseidon channel.
+/// Matches Rust's draw_query_indices: draw felt252 from channel, extract low 64 bits, mod range.
+fn channel_draw_query_indices(
+    ref ch: PoseidonChannel, half_n: u32, n_queries: u32,
+) -> Array<u32> {
     let mut indices: Array<u32> = array![];
-    let mut current = seed;
-    let range_u64: u64 = range.into();
+    let half_n_u64: u64 = half_n.into();
     let mut i: u32 = 0;
     loop {
-        if i >= count {
+        if i >= n_queries {
             break;
         }
-        // poseidon_hash(current, i)
-        let (s0, _, _) = hades_permutation(current, i.into(), 2);
-        current = s0;
-        // Extract lower 64 bits
-        let hash_u256: u256 = current.into();
+        let felt = channel_draw_felt252(ref ch);
+        let hash_u256: u256 = felt.into();
         let val_u64: u64 = (hash_u256 % 0x10000000000000000).try_into().unwrap();
-        let index: u32 = (val_u64 % range_u64).try_into().unwrap();
+        let index: u32 = (val_u64 % half_n_u64).try_into().unwrap();
         indices.append(index);
         i += 1;
     };
     indices
 }
 
-/// Concatenate two QM31 arrays into a single opening point.
-fn build_opening_point(first: @Array<QM31>, second: @Array<QM31>) -> Array<QM31> {
-    let mut result: Array<QM31> = array![];
-    let mut i: u32 = 0;
-    loop {
-        if i >= first.len() {
-            break;
-        }
-        result.append(*first.at(i));
-        i += 1;
-    };
-    i = 0;
-    loop {
-        if i >= second.len() {
-            break;
-        }
-        result.append(*second.at(i));
-        i += 1;
-    };
-    result
-}
-
-/// Reverse a QM31 span into a new array.
-fn reverse_qm31_span(arr: Span<QM31>) -> Array<QM31> {
-    let mut result: Array<QM31> = array![];
-    let len = arr.len();
-    if len == 0 {
-        return result;
+/// Compute the next query pair index after folding.
+/// Matches Rust's next_query_pair_index: reduces index to next folded layer's range.
+fn next_query_pair_index(current_idx: u32, layer_mid: u32) -> u32 {
+    let next_half = layer_mid / 2;
+    if next_half == 0 {
+        0
+    } else {
+        current_idx % next_half
     }
-    let mut i: u32 = len;
-    loop {
-        if i == 0 {
-            break;
-        }
-        i -= 1;
-        result.append(*arr.at(i));
-    };
-    result
 }
 
 /// Verify an MLE opening proof against a committed Poseidon Merkle root.
 ///
-/// Checks:
-/// 1. All Merkle proofs authenticate values against their layer roots
-/// 2. Intermediate folding consistency: fold from round i matches values at round i+1
-/// 3. Final folded value matches claimed evaluation
-///
-/// The `point` is the full MLE opening point (e.g. row_challenges++assignment for matrix A).
-/// Variables are folded in **reverse** order (last variable first) to match
-/// the consecutive-pair folding convention.
+/// Matches Rust's verify_mle_opening() from mle_opening.rs exactly:
+/// 1. Channel-based Fiat-Shamir transcript (mix commitment + intermediate roots)
+/// 2. Channel-based query derivation (draw_query_indices)
+/// 3. Lo/hi split folding (not consecutive pairs)
+/// 4. Raw packed QM31 leaves (no poseidon_hash(leaf, 0))
+/// 5. Forward folding order (first variable first)
+/// 6. MLE_NUM_QUERIES = 14
 fn verify_mle_opening(
     commitment_root: felt252,
-    point: Span<QM31>,
-    claimed_eval: QM31,
     proof: @MleOpeningProof,
+    challenges: Span<QM31>,
+    ref ch: PoseidonChannel,
 ) -> bool {
-    let n: u32 = point.len();
-    if n == 0 {
-        return false;
-    }
+    let n_rounds: u32 = challenges.len();
 
-    // Check intermediate roots count: n variables → n-1 intermediate layers
+    // Replay channel transcript: mix initial commitment and intermediate roots
+    channel_mix_felt(ref ch, commitment_root);
     let intermediate_roots_span = proof.intermediate_roots.span();
-    if intermediate_roots_span.len() != n - 1 {
-        return false;
-    }
-
-    // Check final value matches claimed evaluation
-    if !qm31_eq(*proof.final_value, claimed_eval) {
-        return false;
-    }
-
-    // Reverse point for folding order (fold_layer fixes last MLE variable first)
-    let reversed_point = reverse_qm31_span(point);
-
-    // Re-derive query indices via Fiat-Shamir
-    // seed = poseidon_hash_span([commitment_root, intermediate_roots..., packed_point...])
-    let mut seed_inputs: Array<felt252> = array![commitment_root];
     let mut ir_i: u32 = 0;
     loop {
         if ir_i >= intermediate_roots_span.len() {
             break;
         }
-        seed_inputs.append(*intermediate_roots_span.at(ir_i));
+        channel_mix_felt(ref ch, *intermediate_roots_span.at(ir_i));
         ir_i += 1;
     };
-    let mut p_i: u32 = 0;
-    loop {
-        if p_i >= point.len() {
-            break;
-        }
-        seed_inputs.append(pack_qm31_to_felt(*point.at(p_i)));
-        p_i += 1;
+
+    // Build layer roots: layer 0 = commitment, layers 1..n-1 = intermediate_roots
+    // layer_roots has entries for every round that has a Merkle tree
+    // (rounds 0..layer_roots_len-1 have trees)
+    let layer_roots_len: u32 = 1 + intermediate_roots_span.len();
+
+    if n_rounds == 0 {
+        return proof.queries.len() == 0;
+    }
+
+    // Initial evals size is 2^n_rounds, half_n = 2^(n_rounds-1)
+    let half_n: u32 = pow2(n_rounds - 1);
+    let n_queries: u32 = if MLE_NUM_QUERIES < half_n {
+        MLE_NUM_QUERIES
+    } else {
+        half_n
     };
-    let seed = poseidon_hash_span(seed_inputs.span());
+    let query_indices = channel_draw_query_indices(ref ch, half_n, n_queries);
 
-    let layer0_pairs: u32 = pow2(n) / 2;
     let queries_span = proof.queries.span();
-    let num_queries = queries_span.len();
-    let query_indices = derive_mle_query_indices(seed, num_queries, layer0_pairs);
+    if queries_span.len() != n_queries {
+        return false;
+    }
 
-    // Verify each query
+    // Verify each query chain
     let mut q_idx: u32 = 0;
     loop {
-        if q_idx >= num_queries {
+        if q_idx >= n_queries {
             break;
         }
 
         let query = queries_span.at(q_idx);
-        let expected_pair_index: u32 = *query_indices.at(q_idx);
-
-        // Check query targets the correct Fiat-Shamir-derived index
-        if *query.initial_pair_index != expected_pair_index {
-            return false;
-        }
-
         let rounds_span = query.rounds.span();
-        if rounds_span.len() != n {
+
+        if rounds_span.len() != n_rounds {
             return false;
         }
 
-        let mut pair_idx: u32 = *query.initial_pair_index;
-        let mut prev_fold: QM31 = qm31_zero();
-        let mut prev_pair_idx: u32 = 0;
+        // Verify initial pair index matches reconstructed query
+        if *query.initial_pair_index != *query_indices.at(q_idx) {
+            return false;
+        }
+
+        let mut current_idx: u32 = *query.initial_pair_index;
+        // Track the current layer size. Initial layer has 2^n_rounds elements.
+        let mut layer_size: u32 = pow2(n_rounds);
 
         let mut round: u32 = 0;
         loop {
-            if round >= n {
+            if round >= n_rounds {
                 break;
             }
 
@@ -830,65 +747,47 @@ fn verify_mle_opening(
             let left_siblings = rd.left_siblings.span();
             let right_siblings = rd.right_siblings.span();
 
-            let left_idx: u32 = 2 * pair_idx;
-            let right_idx: u32 = 2 * pair_idx + 1;
+            // Lo/hi split: left = layer[idx], right = layer[mid + idx]
+            let mid: u32 = layer_size / 2;
+            let left_idx: u32 = current_idx;
+            let right_idx: u32 = mid + current_idx;
 
-            // Intermediate folding consistency: the fold from round i-1
-            // must match the appropriate value authenticated at round i.
-            if round > 0 {
-                if prev_pair_idx % 2 == 0 {
-                    if !qm31_eq(left_value, prev_fold) {
-                        return false;
-                    }
+            // Verify Merkle authentication paths for rounds that have trees
+            if round < layer_roots_len {
+                let layer_root = if round == 0 {
+                    commitment_root
                 } else {
-                    if !qm31_eq(right_value, prev_fold) {
-                        return false;
-                    }
+                    *intermediate_roots_span.at(round - 1)
+                };
+
+                // Raw packed QM31 as leaf — no poseidon_hash(leaf, 0)
+                let left_leaf = pack_qm31_to_felt(left_value);
+                let right_leaf = pack_qm31_to_felt(right_value);
+
+                if !verify_merkle_path(left_leaf, left_idx, left_siblings, layer_root) {
+                    return false;
+                }
+                if !verify_merkle_path(right_leaf, right_idx, right_siblings, layer_root) {
+                    return false;
                 }
             }
 
-            // Compute leaf hashes (layer 0 = M31, later layers = packed QM31)
-            let left_hash = if round == 0 {
-                hash_m31_leaf(left_value.a.a)
-            } else {
-                hash_qm31_leaf(left_value)
-            };
-            let right_hash = if round == 0 {
-                hash_m31_leaf(right_value.a.a)
-            } else {
-                hash_qm31_leaf(right_value)
-            };
-
-            // Get the Merkle root for this layer
-            let layer_root = if round == 0 {
-                commitment_root
-            } else {
-                *intermediate_roots_span.at(round - 1)
-            };
-
-            // Verify Merkle authentication paths
-            if !verify_merkle_path(left_hash, left_idx, left_siblings, layer_root) {
-                return false;
-            }
-            if !verify_merkle_path(right_hash, right_idx, right_siblings, layer_root) {
-                return false;
-            }
-
-            // Compute folded value: challenge * (right - left) + left
-            let challenge: QM31 = *reversed_point.at(round);
+            // Check algebraic fold: f(r) = left + r * (right - left)
+            let challenge: QM31 = *challenges.at(round); // forward order
             let diff = qm31_sub(right_value, left_value);
-            let fold_val = qm31_add(qm31_mul(challenge, diff), left_value);
+            let fold_val = qm31_add(left_value, qm31_mul(challenge, diff));
 
-            // For the last round, the folded value must equal final_value
-            if round == n - 1 {
+            // If this is the last round, the folded value must equal final_value
+            if round == n_rounds - 1 {
                 if !qm31_eq(fold_val, *proof.final_value) {
                     return false;
                 }
             }
 
-            prev_fold = fold_val;
-            prev_pair_idx = pair_idx;
-            pair_idx = pair_idx / 2;
+            // Advance to next layer
+            current_idx = next_query_pair_index(current_idx, mid);
+            layer_size = mid;
+
             round += 1;
         };
 
@@ -929,8 +828,9 @@ trait ISumcheckVerifier<TContractState> {
 #[starknet::contract]
 mod SumcheckVerifierContract {
     use super::{
-        MatMulSumcheckProof, channel_default, channel_draw_qm31s, channel_mix_u64, log2_ceil,
-        next_power_of_two, verify_sumcheck_inner, verify_mle_opening, build_opening_point,
+        MatMulSumcheckProof, channel_default, channel_draw_qm31s, channel_mix_u64,
+        channel_mix_felt, pack_qm31_to_felt, log2_ceil, next_power_of_two,
+        verify_sumcheck_inner, verify_mle_opening,
     };
     use starknet::storage::{
         StoragePointerReadAccess, StoragePointerWriteAccess, Map, StoragePathEntry,
@@ -1063,8 +963,16 @@ mod SumcheckVerifierContract {
             // Draw row and column challenges (needed for MLE opening points)
             let m_log = log2_ceil(next_power_of_two(m));
             let n_log = log2_ceil(next_power_of_two(n));
-            let row_challenges = channel_draw_qm31s(ref ch, m_log);
-            let col_challenges = channel_draw_qm31s(ref ch, n_log);
+            let _row_challenges = channel_draw_qm31s(ref ch, m_log);
+            let _col_challenges = channel_draw_qm31s(ref ch, n_log);
+
+            // Mix claimed sum into channel (matching Rust prover)
+            let packed_sum = pack_qm31_to_felt(claimed_sum);
+            channel_mix_felt(ref ch, packed_sum);
+
+            // Mix commitments into channel (matching Rust prover)
+            channel_mix_felt(ref ch, a_commitment);
+            channel_mix_felt(ref ch, b_commitment);
 
             // 5. Verify sumcheck rounds (returns assignment = challenges from each round)
             let (is_valid, proof_hash, assignment) = verify_sumcheck_inner(
@@ -1082,11 +990,10 @@ mod SumcheckVerifierContract {
             }
 
             // 6. Verify MLE opening for matrix A
-            // Opening point: (row_challenges, assignment)
-            // MLE_A has m_log + k_log variables
-            let a_point = build_opening_point(@row_challenges, @assignment);
+            // Uses assignment (sumcheck challenges) as the opening point.
+            // Channel state flows through from sumcheck verification.
             let a_valid = verify_mle_opening(
-                a_commitment, a_point.span(), final_a_eval, @a_opening,
+                a_commitment, @a_opening, assignment.span(), ref ch,
             );
 
             if !a_valid {
@@ -1095,11 +1002,9 @@ mod SumcheckVerifierContract {
             }
 
             // 7. Verify MLE opening for matrix B
-            // Opening point: (assignment, col_challenges)
-            // MLE_B has k_log + n_log variables
-            let b_point = build_opening_point(@assignment, @col_challenges);
+            // Channel continues sequentially from A's verification.
             let b_valid = verify_mle_opening(
-                b_commitment, b_point.span(), final_b_eval, @b_opening,
+                b_commitment, @b_opening, assignment.span(), ref ch,
             );
 
             if !b_valid {
