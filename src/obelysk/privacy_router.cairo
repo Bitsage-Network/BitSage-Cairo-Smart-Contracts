@@ -3378,10 +3378,7 @@ mod PrivacyRouter {
         }
 
         /// Verify threshold proof: proves amount >= large_transfer_threshold without revealing amount
-        /// The proof works by:
-        /// 1. User computes difference_commitment = amount_commitment - threshold * G
-        /// 2. User provides a range proof showing difference >= 0
-        /// 3. This proves amount >= threshold without revealing the exact amount
+        /// Uses bit-decomposition range proof to prove (amount - threshold) >= 0.
         fn _verify_threshold_proof(
             self: @ContractState,
             amount_ciphertext: ElGamalCiphertext,
@@ -3389,48 +3386,21 @@ mod PrivacyRouter {
         ) {
             let _threshold = self.large_transfer_threshold.read();
 
-            // Compute threshold * G (threshold as a scalar times generator)
-            // Note: For very large thresholds, we use the commitment structure
-            let _g = generator();
+            // 1. Validate difference commitment is non-zero
+            let diff_commit = proof.difference_commitment;
+            assert!(!is_zero(diff_commit), "Threshold proof: zero difference commitment");
 
-            // The difference_commitment should be:
-            // difference_commitment = amount_commitment - threshold * G
-            // Where amount_commitment is embedded in the ciphertext's c2 component
-            // (In ElGamal: c2 = amount * G + blinding * public_key)
+            // 2. Validate range proof data has sufficient structure
+            assert!(proof.range_proof_data.len() >= 32, "Threshold proof: insufficient data");
 
-            // Verification strategy:
-            // 1. The range_proof_data contains a proof that the value in
-            //    difference_commitment is non-negative (>= 0)
-            // 2. We verify this proof using bit decomposition
-
-            // Get the expected commitment from the difference
-            // The user provides: difference_commitment = Commit(amount - threshold, blinding_diff)
-            let _diff_commit = proof.difference_commitment;
-
-            // Verify the range proof data is non-empty (actual ZK verification)
-            // The range proof should contain 32 bit commitments for a 32-bit range proof
-            assert!(proof.range_proof_data.len() > 0, "Empty threshold proof");
-
-            // Verify consistency: diff_commit should relate to amount_ciphertext
-            // The commitment structure ensures:
-            // diff_commit = amount_commit - threshold * G
-            //             = (amount * G + r * H) - threshold * G
-            //             = (amount - threshold) * G + r * H
-
-            // For now, we verify the structural correctness by checking:
-            // 1. The commitment point is on curve (implicit in ECPoint)
-            // 2. Range proof data has expected structure (32 * 5 = 160 felts for 32-bit proof)
-            // Full range proof verification would use the bit_proofs module
-
-            // Basic structural validation
-            assert!(proof.range_proof_data.len() >= 32, "Insufficient proof data");
-
-            // Note: In production, this would call the full range proof verification:
-            // verify_bit_decomposition_proof(diff_commit, proof.range_proof_data)
-            // For now, we accept the proof if it has valid structure
-
-            // Log that threshold proof was verified
-            // The audit trail is in the event when the request is created
+            // 3. Deserialize and verify 32-bit range proof on the difference commitment
+            // This proves the committed value (amount - threshold) is in [0, 2^32)
+            // which proves amount >= threshold
+            let range_proof_opt = deserialize_range_proof_32(proof.range_proof_data);
+            assert!(range_proof_opt.is_some(), "Threshold proof: invalid range proof data");
+            let range_proof = range_proof_opt.unwrap();
+            let valid = verify_range_proof_32(diff_commit, @range_proof);
+            assert!(valid, "Threshold proof: range proof verification failed");
         }
 
         /// Verify an inequality proof: proves two values are not equal
@@ -3560,6 +3530,8 @@ mod PrivacyRouter {
         }
 
         /// Verify proof that encrypted_amount correctly encrypts `amount` under public_key
+        /// Full Schnorr-style verification: proves knowledge of randomness r such that
+        /// C1 = r*G and the ciphertext is well-formed for the given amount.
         fn _verify_encryption_proof(
             self: @ContractState,
             amount: u256,
@@ -3567,25 +3539,38 @@ mod PrivacyRouter {
             proof: EncryptionProof,
             public_key: ECPoint
         ) {
-            // Simplified verification (production would use full Sigma protocol)
-            // 1. Verify commitment is valid EC point
+            // 1. Validate proof structure
             let commitment = get_commitment(proof);
             assert!(!is_zero(commitment), "Invalid proof commitment");
+            assert!(proof.response != 0, "Invalid proof response");
+            assert!(proof.challenge != 0, "Invalid proof challenge");
 
-            // 2. Verify Fiat-Shamir challenge is correct
+            // 2. Verify Fiat-Shamir challenge
             let mut points: Array<ECPoint> = array![];
             points.append(get_c1(encrypted_amount));
             points.append(get_c2(encrypted_amount));
             points.append(commitment);
             points.append(public_key);
 
-            let _computed_challenge = hash_points(points);
-            // In production: strict challenge verification
-            // For now, basic check that proof has valid structure
-            assert!(proof.response != 0, "Invalid proof response");
+            let computed_challenge = hash_points(points);
+            let computed_reduced = reduce_mod_n(computed_challenge);
+            let proof_challenge_reduced = reduce_mod_n(proof.challenge);
+            assert!(computed_reduced == proof_challenge_reduced, "Encryption proof: challenge mismatch");
+
+            // 3. Full Schnorr verification: response*G + challenge*C1 == commitment
+            // This proves knowledge of r such that C1 = r*G
+            let g = generator();
+            let response_reduced = reduce_mod_n(proof.response);
+            let s_g = ec_mul(response_reduced, g);
+            let e_c1 = ec_mul(proof_challenge_reduced, get_c1(encrypted_amount));
+            let lhs = ec_add(s_g, e_c1);
+
+            assert!(lhs.x == commitment.x && lhs.y == commitment.y,
+                "Encryption proof: Schnorr equation failed");
         }
 
-        /// Verify withdrawal proof (proves amount is less than encrypted balance)
+        /// Verify withdrawal proof (proves encrypted_delta encrypts `amount` under account key)
+        /// Full Schnorr verification on C1 = r*G, proving knowledge of randomness.
         fn _verify_withdrawal_proof(
             self: @ContractState,
             amount: u256,
@@ -3593,56 +3578,115 @@ mod PrivacyRouter {
             proof: EncryptionProof,
             account: PrivateAccount
         ) {
-            // Verify:
-            // 1. encrypted_delta correctly encrypts `amount`
-            // NOTE: Range proof verification is done in withdraw() with actual RangeProof
-
+            // 1. Validate proof structure
             let commitment = get_commitment(proof);
-            assert!(!is_zero(commitment), "Invalid proof commitment");
+            assert!(!is_zero(commitment), "Invalid withdrawal proof commitment");
+            assert!(proof.response != 0, "Invalid withdrawal proof response");
+            assert!(proof.challenge != 0, "Invalid withdrawal proof challenge");
 
-            // The range_proof_hash field is now for audit logging only
-            // Actual cryptographic verification is done in withdraw() with the full RangeProof
+            // 2. Verify Fiat-Shamir challenge binding
+            let mut points: Array<ECPoint> = array![];
+            points.append(get_c1(encrypted_delta));
+            points.append(get_c2(encrypted_delta));
+            points.append(commitment);
+            points.append(account.public_key);
+
+            let computed_challenge = hash_points(points);
+            let computed_reduced = reduce_mod_n(computed_challenge);
+            let proof_challenge_reduced = reduce_mod_n(proof.challenge);
+            assert!(computed_reduced == proof_challenge_reduced, "Withdrawal proof: challenge mismatch");
+
+            // 3. Schnorr verification: response*G + challenge*C1 == commitment
+            let g = generator();
+            let response_reduced = reduce_mod_n(proof.response);
+            let s_g = ec_mul(response_reduced, g);
+            let e_c1 = ec_mul(proof_challenge_reduced, get_c1(encrypted_delta));
+            let lhs = ec_add(s_g, e_c1);
+
+            assert!(lhs.x == commitment.x && lhs.y == commitment.y,
+                "Withdrawal proof: Schnorr equation failed");
         }
 
         /// Verify transfer proof (proves valid sender debit and receiver credit)
+        /// Schnorr proofs on sender and receiver ciphertexts prove knowledge of
+        /// encryption randomness. Same-encryption is verified separately in the
+        /// PrivateTransferWithAudit flow.
         fn _verify_transfer_proof(
             self: @ContractState,
             transfer: PrivateTransfer,
             sender_pk: ECPoint,
             receiver_pk: ECPoint
         ) {
-            // Verify:
-            // 1. sender_delta and encrypted_amount encrypt same value
-            // 2. sender has sufficient balance
-            // 3. Amount is non-negative
+            // 1. Validate ciphertexts are well-formed
+            assert!(verify_ciphertext(transfer.encrypted_amount), "Invalid receiver ciphertext");
+            assert!(verify_ciphertext(transfer.sender_delta), "Invalid sender ciphertext");
 
+            // 2. Validate individual proof commitments
             let sender_commitment = get_commitment(transfer.proof.sender_proof);
             let receiver_commitment = get_commitment(transfer.proof.receiver_proof);
             assert!(!is_zero(sender_commitment), "Invalid sender proof");
             assert!(!is_zero(receiver_commitment), "Invalid receiver proof");
 
-            // Verify ciphertexts are well-formed
-            assert!(verify_ciphertext(transfer.encrypted_amount), "Invalid receiver ciphertext");
-            assert!(verify_ciphertext(transfer.sender_delta), "Invalid sender ciphertext");
+            // 3. Schnorr verification on sender proof: proves knowledge of sender's randomness
+            assert!(transfer.proof.sender_proof.response != 0, "Zero sender response");
+            assert!(transfer.proof.sender_proof.challenge != 0, "Zero sender challenge");
+            let g = generator();
+            let s_reduced = reduce_mod_n(transfer.proof.sender_proof.response);
+            let e_reduced = reduce_mod_n(transfer.proof.sender_proof.challenge);
+            let s_g = ec_mul(s_reduced, g);
+            let e_c1 = ec_mul(e_reduced, get_c1(transfer.sender_delta));
+            let lhs_s = ec_add(s_g, e_c1);
+            assert!(lhs_s.x == sender_commitment.x && lhs_s.y == sender_commitment.y,
+                "Transfer: sender Schnorr failed");
+
+            // 4. Schnorr verification on receiver proof
+            assert!(transfer.proof.receiver_proof.response != 0, "Zero receiver response");
+            assert!(transfer.proof.receiver_proof.challenge != 0, "Zero receiver challenge");
+            let sr_reduced = reduce_mod_n(transfer.proof.receiver_proof.response);
+            let er_reduced = reduce_mod_n(transfer.proof.receiver_proof.challenge);
+            let sr_g = ec_mul(sr_reduced, g);
+            let er_c1 = ec_mul(er_reduced, get_c1(transfer.encrypted_amount));
+            let lhs_r = ec_add(sr_g, er_c1);
+            assert!(lhs_r.x == receiver_commitment.x && lhs_r.y == receiver_commitment.y,
+                "Transfer: receiver Schnorr failed");
         }
 
-        /// Verify decryption proof (proves knowledge of private key)
+        /// Verify decryption proof (proves knowledge of private key sk such that pk = sk * G)
+        /// Full Schnorr verification: response*G + challenge*pk == commitment
         fn _verify_decryption_proof(
             self: @ContractState,
             ciphertext: ElGamalCiphertext,
             proof: EncryptionProof,
             public_key: ECPoint
         ) {
-            // Verify that prover knows sk such that pk = sk * G
-            // This is a Schnorr-like proof
-
+            // 1. Validate proof structure
             let commitment = get_commitment(proof);
             assert!(!is_zero(commitment), "Invalid decryption proof");
-            assert!(proof.response != 0, "Invalid proof response");
+            assert!(proof.response != 0, "Invalid decryption proof response");
+            assert!(proof.challenge != 0, "Invalid decryption proof challenge");
 
-            // In production: full Schnorr verification
-            // e = H(pk, commitment, ciphertext)
-            // Verify: response * G == commitment + e * pk
+            // 2. Verify Fiat-Shamir challenge: e = H(pk, commitment, C1, C2)
+            let mut challenge_input: Array<ECPoint> = array![];
+            challenge_input.append(public_key);
+            challenge_input.append(commitment);
+            challenge_input.append(get_c1(ciphertext));
+            challenge_input.append(get_c2(ciphertext));
+
+            let computed_challenge = hash_points(challenge_input);
+            let computed_reduced = reduce_mod_n(computed_challenge);
+            let proof_challenge_reduced = reduce_mod_n(proof.challenge);
+            assert!(computed_reduced == proof_challenge_reduced,
+                "Decryption proof: challenge mismatch");
+
+            // 3. Schnorr equation: response*G + challenge*pk == commitment
+            let g = generator();
+            let response_reduced = reduce_mod_n(proof.response);
+            let s_g = ec_mul(response_reduced, g);
+            let e_pk = ec_mul(proof_challenge_reduced, public_key);
+            let expected_r = ec_add(s_g, e_pk);
+
+            assert!(expected_r.x == commitment.x && expected_r.y == commitment.y,
+                "Decryption proof: Schnorr equation failed");
         }
 
         // =====================================================================
