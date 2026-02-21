@@ -446,6 +446,9 @@ pub mod PrivacyPools {
         LeanIMTState, LeanIMTProof, LeanIMTBatchResult,
         calculate_depth, hash_pair, verify_proof,
     };
+    use sage_contracts::obelysk::bit_proofs::{
+        verify_range_proof_32, deserialize_range_proof_32,
+    };
     use starknet::{
         ContractAddress, ClassHash, get_caller_address, get_block_timestamp, get_contract_address,
     };
@@ -1221,6 +1224,15 @@ pub mod PrivacyPools {
             assert!(commitment != 0, "Invalid commitment");
             assert!(!self.deposit_exists.read(commitment), "Deposit already exists");
             assert!(amount > 0, "Amount must be positive");
+
+            // Verify range proof: proves amount_commitment commits to a value in [0, 2^32)
+            if range_proof_data.len() > 0 {
+                let rp_opt = deserialize_range_proof_32(range_proof_data);
+                assert!(rp_opt.is_some(), "Invalid range proof data");
+                let rp = rp_opt.unwrap();
+                let valid = verify_range_proof_32(amount_commitment, @rp);
+                assert!(valid, "Range proof verification failed");
+            }
 
             let caller = get_caller_address();
             let timestamp = get_block_timestamp();

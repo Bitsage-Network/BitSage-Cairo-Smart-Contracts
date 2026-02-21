@@ -316,8 +316,32 @@ mod ProofVerifier {
             job_id: ProofJobId,
             canonical_proof: Array<felt252>
         ) {
-            let _ = job_id;
-            let _ = canonical_proof;
+            // Anyone can challenge a verified proof by submitting a canonical proof
+            let status = self.job_status.read(job_id.value);
+            assert(status == ProofStatus::Verified, 'Job not in Verified status');
+
+            // Recompute and verify the canonical proof
+            let canonical_hash = self._compute_proof_hash(@canonical_proof);
+            let stored_hash = self.job_proof_hashes.read(job_id.value);
+
+            // If the canonical proof hash differs from stored, the original was fraudulent
+            if canonical_hash != stored_hash {
+                // Slash the prover's stake
+                let worker_id_felt = self.job_worker.read(job_id.value);
+                let current_stake = self.prover_stakes.read(worker_id_felt);
+                if current_stake > 0 {
+                    // Slash entire stake
+                    self.prover_stakes.write(worker_id_felt, 0);
+                }
+
+                // Mark job as failed (dispute resolved)
+                self.job_status.write(job_id.value, ProofStatus::Failed);
+
+                self.emit(ProofRejected {
+                    job_id: job_id.value,
+                    reason: 'dispute_resolved_fraud',
+                });
+            }
         }
 
         fn register_as_prover(
@@ -326,9 +350,29 @@ mod ProofVerifier {
             stake_amount: u256,
             supported_proof_types: Array<ProofType>
         ) {
-            let _ = worker_id;
-            let _ = stake_amount;
             let _ = supported_proof_types;
+
+            // Minimum stake required to be a prover
+            let min_stake: u256 = 1000_u256; // Minimum 1000 tokens
+            assert(stake_amount >= min_stake, 'Insufficient stake');
+
+            // Record the stake
+            let current_stake = self.prover_stakes.read(worker_id.value);
+            self.prover_stakes.write(worker_id.value, current_stake + stake_amount);
+
+            // Initialize metrics if new prover
+            if current_stake == 0 {
+                let metrics = ProverMetrics {
+                    worker_id,
+                    proofs_completed: 0,
+                    success_rate: 0,
+                    average_completion_time: 0,
+                    stake_amount: current_stake + stake_amount,
+                    total_rewards_earned: 0,
+                    reputation_score: 100,
+                };
+                self.prover_metrics.write(worker_id.value, metrics);
+            }
         }
 
         fn claim_proof_job(
@@ -336,8 +380,26 @@ mod ProofVerifier {
             job_id: ProofJobId,
             worker_id: WorkerId
         ) -> bool {
-            let _ = job_id;
-            let _ = worker_id;
+            // Verify job is pending
+            let status = self.job_status.read(job_id.value);
+            if status != ProofStatus::Pending {
+                return false;
+            }
+
+            // Verify prover has sufficient stake
+            let stake = self.prover_stakes.read(worker_id.value);
+            if stake == 0 {
+                return false;
+            }
+
+            // Verify job not already claimed by checking worker assignment
+            let current_worker = self.job_worker.read(job_id.value);
+            if current_worker != 0 {
+                return false;
+            }
+
+            // Assign job to worker
+            self.job_worker.write(job_id.value, worker_id.value);
             true
         }
 
@@ -345,29 +407,42 @@ mod ProofVerifier {
             self: @ContractState,
             worker_id: WorkerId
         ) -> ProverMetrics {
-             ProverMetrics {
-                worker_id,
-                proofs_completed: 0,
-                success_rate: 0,
-                average_completion_time: 0,
-                stake_amount: 0,
-                total_rewards_earned: 0,
-                reputation_score: 0
-            }
+            self.prover_metrics.read(worker_id.value)
         }
 
         fn update_economics(
             ref self: ContractState,
             economics: ProofEconomics
         ) {
+            // Owner-only
+            self._only_owner();
             let _ = economics;
+            // Economics stored per proof type - would need additional storage maps
+            // For now, validates authorization. Full implementation requires
+            // economics_by_type: Map<ProofType, ProofEconomics> in storage.
         }
 
         fn withdraw_stake(
             ref self: ContractState,
             amount: u256
         ) {
-            let _ = amount;
+            let caller = get_caller_address();
+            // Use caller address as worker_id for stake lookup
+            let caller_felt: felt252 = caller.into();
+            let current_stake = self.prover_stakes.read(caller_felt);
+            assert(current_stake >= amount, 'Insufficient stake balance');
+
+            // Check no pending jobs assigned to this prover
+            // In a full implementation, maintain a prover_job_count map
+            // For now, enforce a minimum remaining stake
+            let remaining = current_stake - amount;
+            if remaining > 0 {
+                assert(remaining >= 1000_u256, 'Below min stake after withdraw');
+            }
+
+            self.prover_stakes.write(caller_felt, remaining);
+            // Token transfer would happen here via ERC20 dispatcher
+            // Requires staking token address in storage
         }
 
         fn is_enclave_whitelisted(
@@ -582,11 +657,10 @@ mod ProofVerifier {
             // =====================================================================
             let computed_hash = self._compute_proof_hash(proof_data);
 
-            // Hash verification - the computed hash should match expected
-            // This ensures proof integrity
+            // Hash verification - the computed hash must match expected
+            // This ensures proof integrity and prevents proof substitution
             if computed_hash != expected_hash {
-                // Note: In production, you might want to compute the hash server-side
-                // and only verify the structure on-chain for gas efficiency
+                return false;
             }
 
             // All checks passed

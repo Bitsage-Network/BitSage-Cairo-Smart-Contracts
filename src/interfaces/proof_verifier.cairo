@@ -72,7 +72,7 @@ pub struct ProofSubmission {
 }
 
 // Proof status
-#[derive(Copy, Drop, Serde, starknet::Store)]
+#[derive(Copy, Drop, Serde, starknet::Store, PartialEq)]
 #[allow(starknet::store_no_default_variant)]
 pub enum ProofStatus {
     Pending,
