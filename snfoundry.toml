@@ -1,3 +1,8 @@
 [sncast.sepolia]
 url = "https://api.cartridge.gg/x/starknet/sepolia"
 account = "deployer"
+
+[sncast.mainnet]
+url = "https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/GUBwFqKhSgn4mwVbN6Sbn"
+account = "mainnet-deployer"
+accounts-file = "deployment/sncast_accounts.json"

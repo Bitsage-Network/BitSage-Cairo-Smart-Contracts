@@ -52,9 +52,29 @@ pub struct CircuitBreakerConfig {
     pub tripped_at: u64,
 }
 
+/// Pragma DataType enum — must match the on-chain definition
+/// Variant 0 = SpotEntry(pair_id), Variant 1 = FutureEntry((pair_id, expiry)),
+/// Variant 2 = GenericEntry(key)
+#[derive(Copy, Drop, Serde)]
+pub enum DataType {
+    SpotEntry: felt252,
+    FutureEntry: (felt252, u64),
+    GenericEntry: felt252,
+}
+
+/// Pragma response struct
+#[derive(Copy, Drop, Serde)]
+pub struct PragmaPricesResponse {
+    pub price: u128,
+    pub decimals: u32,
+    pub last_updated_timestamp: u64,
+    pub num_sources_aggregated: u32,
+    pub expiration_timestamp: Option<u64>,
+}
+
 #[starknet::interface]
 pub trait IPragmaOracle<TContractState> {
-    fn get_data_median(self: @TContractState, data_type: felt252, pair_id: felt252) -> (u128, u32, u64, u32);
+    fn get_data_median(self: @TContractState, data_type: DataType) -> PragmaPricesResponse;
 }
 
 #[starknet::interface]
@@ -82,7 +102,7 @@ pub trait IOracleWrapper<TContractState> {
 
 #[starknet::contract]
 mod OracleWrapper {
-    use super::{IOracleWrapper, IPragmaOracleDispatcher, IPragmaOracleDispatcherTrait, PragmaPrice, PricePair, OracleConfig, CircuitBreakerConfig};
+    use super::{IOracleWrapper, IPragmaOracleDispatcher, IPragmaOracleDispatcherTrait, DataType, PragmaPricesResponse, PragmaPrice, PricePair, OracleConfig, CircuitBreakerConfig};
     use starknet::{
         ContractAddress, ClassHash, get_caller_address, get_block_timestamp,
         syscalls::replace_class_syscall, SyscallResultTrait,
@@ -95,7 +115,6 @@ mod OracleWrapper {
     const PAIR_STRK_USD: felt252 = 'STRK/USD';
     const PAIR_SAGE_USD: felt252 = 'SAGE/USD';
     const PAIR_BTC_USD: felt252 = 'BTC/USD';
-    const SPOT_MEDIAN: felt252 = 'SPOT';
     const USD_DECIMALS: u256 = 1000000000000000000;
     const BPS_DENOMINATOR: u256 = 10000;
 
@@ -233,7 +252,11 @@ mod OracleWrapper {
             }
 
             let pragma = IPragmaOracleDispatcher { contract_address: config.pragma_address };
-            let (price, decimals, last_updated, num_sources) = pragma.get_data_median(SPOT_MEDIAN, pair_id);
+            let response = pragma.get_data_median(DataType::SpotEntry(pair_id));
+            let price = response.price;
+            let decimals = response.decimals;
+            let last_updated = response.last_updated_timestamp;
+            let num_sources = response.num_sources_aggregated;
 
             // Check price freshness
             if price > 0 && (now - last_updated) <= config.max_price_age {
