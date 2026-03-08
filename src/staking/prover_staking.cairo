@@ -137,6 +137,12 @@ pub trait IProverStaking<TContractState> {
     /// Get staking configuration
     fn get_config(self: @TContractState) -> StakingConfig;
     
+    /// Transfer contract ownership (admin only)
+    fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
+
+    /// Get current owner
+    fn owner(self: @TContractState) -> ContractAddress;
+
     /// Update staking configuration (admin only)
     fn update_config(ref self: TContractState, config: StakingConfig);
 
@@ -583,6 +589,16 @@ mod ProverStaking {
 
         fn get_config(self: @ContractState) -> StakingConfig {
             self.config.read()
+        }
+
+        fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
+            assert!(get_caller_address() == self.owner.read(), "Only owner");
+            assert!(!new_owner.is_zero(), "New owner cannot be zero");
+            self.owner.write(new_owner);
+        }
+
+        fn owner(self: @ContractState) -> ContractAddress {
+            self.owner.read()
         }
 
         fn update_config(ref self: ContractState, config: StakingConfig) {
