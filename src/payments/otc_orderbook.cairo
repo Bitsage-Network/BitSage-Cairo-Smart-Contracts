@@ -312,6 +312,15 @@ pub trait IOTCOrderbook<TContractState> {
 
     /// Set upgrade timelock delay (owner only)
     fn set_upgrade_delay(ref self: TContractState, delay: u64);
+
+    /// Transfer contract ownership
+    fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
+
+    /// Get contract owner
+    fn owner(self: @TContractState) -> ContractAddress;
+
+    /// Admin emergency withdraw of any token to a recipient (owner only)
+    fn admin_withdraw(ref self: TContractState, token: ContractAddress, amount: u256, recipient: ContractAddress);
 }
 
 #[starknet::contract]
@@ -1271,6 +1280,24 @@ mod OTCOrderbook {
         fn set_upgrade_delay(ref self: ContractState, delay: u64) {
             self._only_owner();
             self.upgrade_delay.write(delay);
+        }
+
+        fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
+            self._only_owner();
+            assert!(!new_owner.is_zero(), "Invalid new owner");
+            self.owner.write(new_owner);
+        }
+
+        fn owner(self: @ContractState) -> ContractAddress {
+            self.owner.read()
+        }
+
+        fn admin_withdraw(ref self: ContractState, token: ContractAddress, amount: u256, recipient: ContractAddress) {
+            self._only_owner();
+            assert!(!recipient.is_zero(), "Invalid recipient");
+            assert!(amount > 0, "Zero amount");
+            let token_dispatcher = IERC20Dispatcher { contract_address: token };
+            token_dispatcher.transfer(recipient, amount);
         }
     }
 

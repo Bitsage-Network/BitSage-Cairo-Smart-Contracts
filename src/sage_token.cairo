@@ -1548,13 +1548,14 @@ pub mod SAGEToken {
             let pending_transfer = self.pending_large_transfers.read(transfer_id);
             assert(!pending_transfer.is_executed, 'Transfer already executed');
             assert(get_block_timestamp() >= pending_transfer.execute_after, 'Timelock not expired');
-            
-            // Execute the transfer
-            let from = pending_transfer.from;
+
+            // Credit the recipient directly (funds were already debited in initiate)
             let to = pending_transfer.to;
             let amount = pending_transfer.amount;
-            
-            self._transfer(from, to, amount);
+            let from = pending_transfer.from;
+
+            let recipient_balance = self.balances.read(to);
+            self.balances.write(to, recipient_balance + amount);
             
             // Mark as executed
             let mut updated_transfer = pending_transfer;
@@ -2021,6 +2022,13 @@ pub mod SAGEToken {
             assert(new_delay <= 604800, 'Delay must be <= 7 days');
 
             self.upgrade_delay.write(new_delay);
+        }
+
+        /// Transfer contract ownership
+        fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
+            self._only_emergency_council();
+            assert(!new_owner.is_zero(), 'New owner cannot be zero');
+            self.owner.write(new_owner);
         }
 
         // ====================================================================

@@ -524,6 +524,9 @@ pub trait ISAGEToken<TContractState> {
     /// @param new_delay: New delay in seconds
     fn set_upgrade_delay(ref self: TContractState, new_delay: u64);
 
+    /// Transfer contract ownership
+    fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
+
     // ====================================================================
     // EMISSION SCHEDULE FUNCTIONS - Deflationary tokenomics model
     // ====================================================================
